@@ -1,357 +1,418 @@
-import { useState, useCallback } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from "recharts";
+import { useState } from "react";
+import {
+  LineChart, Line, BarChart, Bar,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ReferenceLine, CartesianGrid, Cell,
+} from "recharts";
 
-/* ─── MATH ENGINE ─────────────────────────────────────────────────────────── */
-function calcPrice(face, couponRate, periods, freq, ytm) {
-  const C = (couponRate / freq) * face;
-  const y = ytm / freq;
-  const N = periods * freq;
-  if (Math.abs(y) < 1e-12) return C * N + face;
-  return C * (1 - Math.pow(1 + y, -N)) / y + face / Math.pow(1 + y, N);
-}
+/* ─── BOOTSTRAPPER DATA (stub — Treasury API wired in next build) ── */
 
-function solveYTM(face, couponRate, periods, freq, price) {
-  let y = couponRate;
-  for (let i = 0; i < 500; i++) {
-    const p  = calcPrice(face, couponRate, periods, freq, y);
-    const dp = (calcPrice(face, couponRate, periods, freq, y + 1e-6) -
-                calcPrice(face, couponRate, periods, freq, y - 1e-6)) / 2e-6;
-    if (Math.abs(dp) < 1e-14) break;
-    const delta = (p - price) / dp;
-    y -= delta;
-    if (Math.abs(delta) < 1e-10) break;
+const SPOT_RATES = [
+  { tenor: 0.5, par: 5.30, spot: 5.32, fwd: 5.32 },
+  { tenor: 1,   par: 5.10, spot: 5.14, fwd: 4.96 },
+  { tenor: 2,   par: 4.80, spot: 4.86, fwd: 4.58 },
+  { tenor: 3,   par: 4.65, spot: 4.72, fwd: 4.46 },
+  { tenor: 5,   par: 4.50, spot: 4.59, fwd: 4.47 },
+  { tenor: 7,   par: 4.55, spot: 4.65, fwd: 4.86 },
+  { tenor: 10,  par: 4.60, spot: 4.72, fwd: 4.98 },
+  { tenor: 20,  par: 4.80, spot: 4.96, fwd: 5.42 },
+  { tenor: 30,  par: 4.90, spot: 5.08, fwd: 5.64 },
+];
+
+// Vasicek Monte Carlo paths — computed client-side from the SDE
+function genPaths(n = 8, kappa = 0.3, theta = 0.05, sigma = 0.018, r0 = 0.03) {
+  const paths = [];
+  for (let p = 0; p < n; p++) {
+    let r = r0 + (Math.random() - 0.5) * 0.005;
+    const path = [];
+    for (let t = 0; t <= 60; t++) {
+      const dW = (Math.random() * 2 - 1) * Math.sqrt(1 / 12);
+      r = Math.max(0, r + kappa * (theta - r) / 12 + sigma * dW);
+      if (t % 2 === 0) path.push({ t: +(t / 12).toFixed(2), r: +(r * 100).toFixed(3) });
+    }
+    paths.push(path);
   }
-  return y;
+  return paths;
 }
+const VASICEK_PATHS = genPaths();
+const PATH_COLORS = ["#2A8FD4","#1AADAD","#4A8EC0","#2A9070","#5090D0","#1A9898","#3A80B8","#2A8060"];
 
-function buildCashFlows(face, couponRate, periods, freq, ytm) {
-  const C = (couponRate / freq) * face;
-  const y = ytm / freq;
-  const N = periods * freq;
-  const P = calcPrice(face, couponRate, periods, freq, ytm);
-  return Array.from({ length: N }, (_, i) => {
-    const t  = i + 1;
-    const cf = t < N ? C : C + face;
-    const pv = cf / Math.pow(1 + y, t);
-    const w  = pv / P;
-    return { t, tYr: t / freq, cf, pv, w, durContrib: (t / freq) * w };
-  });
-}
+/* ─── DESIGN TOKENS ───────────────────────────────────────────────────────── */
+const T = {
+  bg:      "#08090A",
+  surf:    "#0D1117",
+  surf2:   "#111820",
+  border:  "#1A2030",
+  border2: "#243040",
+  text:    "#D0D8E4",
+  muted:   "#48586A",
+  dim:     "#1A2230",
+  blue:    "#2A8FD4",
+  blueLo:  "#0D2840",
+  cyan:    "#1AADAD",
+  cyanLo:  "#082828",
+  green:   "#2A8060",
+  red:     "#A03828",
+  amber:   "#C07818",
+  amberLo: "#301A04",
+};
 
-function macaulayDuration(cfRows)           { return cfRows.reduce((s, r) => s + r.durContrib, 0); }
-function modifiedDuration(mac, ytm, freq)   { return mac / (1 + ytm / freq); }
-function dv01PerBond(modDur, price)         { return modDur * price * 0.0001; }
-function positionDv01(dv01, notional, face) { return dv01 * (notional / face); }
+const mono  = "'IBM Plex Mono', monospace";
+const serif = "'DM Serif Display', Georgia, serif";
 
-function buildScenarios(face, cr, periods, freq, ytm, price, modDur) {
-  return [-200, -100, -50, -25, 25, 50, 100, 200].map(bp => {
-    const dy     = bp / 10000;
-    const newYTM = Math.max(0.0001, ytm + dy);
-    const exactP = calcPrice(face, cr, periods, freq, newYTM);
-    const approxP= price * (1 - modDur * dy);
-    return { bp, label: `${bp > 0 ? "+" : ""}${bp}`, exact: exactP - price, approx: approxP - price, exactP, newYTM };
-  });
-}
+/* ─── GLOBAL CSS ──────────────────────────────────────────────────────────── */
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Serif+Display:ital@0;1&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  html, body { background: ${T.bg}; color: ${T.text}; }
+  ::-webkit-scrollbar { width: 3px; background: transparent; }
+  ::-webkit-scrollbar-thumb { background: ${T.border2}; border-radius: 2px; }
 
-/* ─── TOKENS ──────────────────────────────────────────────────────────────── */
-const A  = "#F0A500";
-const G  = "#4CAF92";
-const R  = "#E05A4E";
-const BG     = "#111110";
-const BORDER = "#222220";
-const TEXT   = "#EEECEA";
-const MUTED  = "#666460";
-const DIM    = "#3A3A38";
-const FAINT  = "#2A2A28";
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+  .fade-1 { animation: fadeUp 0.3s 0.00s both; }
+  .fade-2 { animation: fadeUp 0.3s 0.06s both; }
+  .fade-3 { animation: fadeUp 0.3s 0.12s both; }
+  .fade-4 { animation: fadeUp 0.3s 0.18s both; }
+
+  .tab-btn { transition: color 0.12s, border-color 0.12s; }
+  .tab-btn:hover { color: ${T.text} !important; }
+
+  .row-h { transition: background 0.08s; }
+  .row-h:hover { background: rgba(42,143,212,0.05) !important; }
+
+  .live { animation: pulse 2.5s infinite; }
+`;
 
 /* ─── PRIMITIVES ──────────────────────────────────────────────────────────── */
-function Label({ children, amber }) {
+function Label({ children, color, size = 9 }) {
   return (
-    <div style={{
-      fontFamily: "'IBM Plex Mono', monospace",
-      fontSize: 10,
-      letterSpacing: "0.14em",
-      textTransform: "uppercase",
-      color: amber ? A : MUTED,
-      marginBottom: 6,
-    }}>
+    <div style={{ fontFamily: mono, fontSize: size, letterSpacing: "0.16em",
+      textTransform: "uppercase", color: color || T.muted, marginBottom: 5 }}>
       {children}
     </div>
   );
 }
 
-function NumInput({ value, onChange, step, min, max }) {
-  const [focused, setFocused] = useState(false);
-  return (
-    <input type="number" value={value} step={step} min={min} max={max}
-      onChange={e => onChange(e.target.value)}
-      style={{ width: "100%", background: "transparent", border: "none", borderBottom: `1px solid ${focused ? A : BORDER}`, color: TEXT, fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, padding: "4px 0 7px", outline: "none", transition: "border-color 0.15s", boxSizing: "border-box" }}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-    />
-  );
+function Divider({ my = 24 }) {
+  return <div style={{ height: 1, background: T.border, margin: `${my}px 0` }} />;
 }
 
-function FreqToggle({ value, onChange }) {
+function KpiBlock({ label, value, sub, accent }) {
   return (
-    <div style={{ display: "flex", gap: 20 }}>
-      {[{ v: 1, l: "Annual" }, { v: 2, l: "Semi-annual" }].map(({ v, l }) => (
-        <label key={v} onClick={() => onChange(v)} style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: value === v ? A : MUTED, transition: "color 0.15s" }}>
-          <div style={{ width: 13, height: 13, border: `1px solid ${value === v ? A : DIM}`, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "border-color 0.15s" }}>
-            {value === v && <div style={{ width: 5, height: 5, borderRadius: "50%", background: A }} />}
-          </div>
-          {l}
-        </label>
-      ))}
+    <div style={{ borderLeft: `1px solid ${T.border}`, paddingLeft: 20, paddingRight: 20 }}>
+      <Label color={accent ? T.blue : T.muted}>{label}</Label>
+      <div style={{ fontFamily: serif, fontSize: accent ? 44 : 22, color: accent ? T.blue : T.text,
+        fontWeight: 400, lineHeight: 1, letterSpacing: "-0.01em" }}>
+        {value}
+      </div>
+      {sub && <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, marginTop: 5 }}>{sub}</div>}
     </div>
   );
 }
 
-function ModeToggle({ value, onChange }) {
-  return (
-    <div style={{ display: "inline-flex", border: `1px solid ${BORDER}`, marginBottom: 32 }}>
-      {[{ id: "price", l: "YTM → Price" }, { id: "ytm", l: "Price → YTM" }].map(({ id, l }) => (
-        <button key={id} onClick={() => onChange(id)} style={{ padding: "8px 18px", background: value === id ? A : "transparent", color: value === id ? BG : MUTED, border: "none", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", cursor: "pointer", transition: "all 0.15s", fontWeight: value === id ? 600 : 400 }}>
-          {l}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <div style={{ marginBottom: 20 }}>
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
-}
-
-function Divider() {
-  return <div style={{ height: 1, background: BORDER, margin: "24px 0" }} />;
-}
-
-/* ─── TOOLTIPS ────────────────────────────────────────────────────────────── */
-const DurTooltip = ({ active, payload, label }) => {
+function ChartTooltip({ active, payload, label, suffix = "" }) {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background: "#1A1A18", border: `1px solid ${BORDER}`, padding: "8px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
-      <div style={{ color: A, marginBottom: 4 }}>t = {label}y</div>
-      <div style={{ color: TEXT }}>Contribution: {payload[0]?.value?.toFixed(4)} yr</div>
-    </div>
-  );
-};
-
-const ScenarioTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{ background: "#1A1A18", border: `1px solid ${BORDER}`, padding: "8px 12px", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
-      <div style={{ color: A, marginBottom: 4 }}>{label} bps</div>
-      <div style={{ color: TEXT }}>Exact: {payload[0]?.value > 0 ? "+" : ""}{payload[0]?.value?.toFixed(4)}</div>
-      <div style={{ color: MUTED }}>Approx: {payload[1]?.value > 0 ? "+" : ""}{payload[1]?.value?.toFixed(4)}</div>
-    </div>
-  );
-};
-
-/* ─── PRICING TAB ─────────────────────────────────────────────────────────── */
-function PricingTab({ face, cr, periods, freq, ytm, mode, daysSince, daysInPer }) {
-  const dirty   = calcPrice(face, cr, periods, freq, ytm);
-  const accrued = (cr / freq) * face * (daysSince / daysInPer);
-  const clean   = dirty - accrued;
-  const cfRows  = buildCashFlows(face, cr, periods, freq, ytm);
-  const macDur  = macaulayDuration(cfRows);
-  const maxPV   = Math.max(...cfRows.map(r => r.pv));
-
-  const parLabel = dirty > face * 1.001 ? "premium" : dirty < face * 0.999 ? "discount" : "par";
-  const parColor = dirty > face * 1.001 ? G : dirty < face * 0.999 ? R : TEXT;
-  const parDiff  = ((dirty / face - 1) * 100).toFixed(3);
-
-  return (
-    <div style={{ padding: "36px 48px", overflowY: "auto" }}>
-
-      {/* Primary */}
-      <div style={{ marginBottom: 36 }}>
-        <Label amber>{mode === "price" ? "Dirty price" : "Solved YTM"}</Label>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 40, fontWeight: 300, color: A, letterSpacing: "-0.04em", lineHeight: 1 }}>
-          {mode === "price" ? `$${dirty.toFixed(4)}` : `${(ytm * 100).toFixed(6)}%`}
+    <div style={{ background: T.surf, border: `1px solid ${T.border2}`, padding: "10px 14px", fontFamily: mono, fontSize: 11 }}>
+      <div style={{ color: T.blue, marginBottom: 6 }}>{label}{suffix}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: p.color, marginBottom: 2 }}>
+          <span style={{ color: T.muted }}>{p.name}: </span>{typeof p.value === "number" ? p.value.toFixed(3) : p.value}
         </div>
-      </div>
+      ))}
+    </div>
+  );
+}
 
-      {/* Secondary trio */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", marginBottom: 8 }}>
-        {[["Clean price", `$${clean.toFixed(4)}`], ["Accrued interest", `$${accrued.toFixed(4)}`], ["Macaulay duration", `${macDur.toFixed(4)} yr`]].map(([l, v], i) => (
-          <div key={l} style={{ borderLeft: i > 0 ? `1px solid ${BORDER}` : "none", paddingLeft: i > 0 ? 28 : 0, paddingRight: 28 }}>
-            <Label>{l}</Label>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 18, color: TEXT, letterSpacing: "-0.01em" }}>{v}</div>
+/* ─── BOOTSTRAP TAB ───────────────────────────────────────────────────────── */
+function BootstrapTab() {
+  const spread_2s10s = SPOT_RATES.find(s => s.tenor === 10).spot - SPOT_RATES.find(s => s.tenor === 2).spot;
+  const CustomDot = ({ cx, cy }) => (
+    <circle cx={cx} cy={cy} r={3} fill={T.bg} stroke={T.blue} strokeWidth={1.5} />
+  );
+
+  return (
+    <div className="fade-3" style={{ padding: "32px 44px", overflowY: "auto", height: "100%" }}>
+
+      {/* KPI row */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", marginBottom: 32, borderLeft: "none" }}>
+        <div>
+          <Label color={T.blue}>2s10s spread</Label>
+          <div style={{ fontFamily: serif, fontSize: 44, color: spread_2s10s >= 0 ? T.blue : T.red, lineHeight: 1 }}>
+            {spread_2s10s >= 0 ? "+" : ""}{(spread_2s10s * 100).toFixed(0)} bps
           </div>
-        ))}
-      </div>
-
-      {/* Par line */}
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: MUTED, marginBottom: 36, marginTop: 12 }}>
-        Trading at <span style={{ color: parColor }}>{parLabel}</span>
-        <span style={{ color: DIM }}> · </span>
-        {parDiff}% {dirty >= face ? "above" : "below"} par
+          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, marginTop: 6 }}>
+            {spread_2s10s >= 0 ? "normal · upward sloping" : "inverted · recession signal"}
+          </div>
+        </div>
+        <KpiBlock label="2Y spot"  value={`${SPOT_RATES.find(s => s.tenor === 2).spot.toFixed(3)}%`} />
+        <KpiBlock label="10Y spot" value={`${SPOT_RATES.find(s => s.tenor === 10).spot.toFixed(3)}%`} />
+        <KpiBlock label="30Y spot" value={`${SPOT_RATES.find(s => s.tenor === 30).spot.toFixed(3)}%`} />
       </div>
 
       <Divider />
 
-      {/* Cash flow table */}
-      <Label>Cash flows</Label>
-      <div style={{ marginTop: 12 }} />
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            {["Period", "Time", "Cash flow", "PV", "Weight", "Dur. contrib"].map((h, i) => (
-              <th key={h} style={{ padding: "0 0 10px", textAlign: i === 0 ? "left" : "right", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 400, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: MUTED, borderBottom: `1px solid ${BORDER}` }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {cfRows.map((row, i) => {
-            const isFinal = i === cfRows.length - 1;
-            return (
-              <tr key={row.t} onMouseEnter={e => e.currentTarget.style.background = "#FFFFFF04"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: MUTED, borderBottom: `1px solid ${BORDER}` }}>{row.t}</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: MUTED, borderBottom: `1px solid ${BORDER}` }}>{row.tYr.toFixed(1)}y</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: isFinal ? A : TEXT, fontWeight: isFinal ? 500 : 400, borderBottom: `1px solid ${BORDER}` }}>{row.cf.toFixed(2)}</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: TEXT, borderBottom: `1px solid ${BORDER}` }}>{row.pv.toFixed(4)}</td>
-                <td style={{ padding: "8px 0", borderBottom: `1px solid ${BORDER}` }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
-                    <div style={{ width: Math.max(2, (row.pv / maxPV) * 60), height: 2, background: isFinal ? A : DIM, transition: "width 0.3s" }} />
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: MUTED, minWidth: 38, textAlign: "right" }}>{(row.w * 100).toFixed(1)}%</span>
-                  </div>
-                </td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: MUTED, borderBottom: `1px solid ${BORDER}` }}>{row.durContrib.toFixed(4)}</td>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr", gap: 48 }}>
+
+        {/* Curve chart */}
+        <div>
+          <Label>Par · spot · forward curves</Label>
+          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 18px" }}>
+            <span style={{ color: T.blue }}>——</span>&ensp;Spot (zero)&emsp;
+            <span style={{ color: T.cyan }}>——</span>&ensp;Par&emsp;
+            <span style={{ color: T.muted }}>– –</span>&ensp;Forward&emsp;
+            · bootstrapped recursively from par yields
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={SPOT_RATES} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="tenor" stroke={T.border}
+                tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
+                tickFormatter={v => `${v}Y`} tickLine={false} axisLine={{ stroke: T.border }} />
+              <YAxis stroke={T.border}
+                tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
+                tickLine={false} axisLine={false} width={44}
+                domain={[4.2, 5.8]} tickFormatter={v => `${v.toFixed(1)}%`} />
+              <Tooltip content={<ChartTooltip suffix="Y" />} cursor={{ stroke: T.border }} />
+              <Line type="monotone" dataKey="spot" stroke={T.blue}  strokeWidth={2}   dot={<CustomDot />} name="Spot" />
+              <Line type="monotone" dataKey="par"  stroke={T.cyan}  strokeWidth={1.5} dot={false} name="Par" />
+              <Line type="monotone" dataKey="fwd"  stroke={T.muted} strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="Forward" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Spot rate table */}
+        <div>
+          <Label>Bootstrapped spot rates</Label>
+          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 14px" }}>
+            recursive extraction · semi-annual compounding
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {["Tenor", "Par", "Spot", "Δ"].map((h, i) => (
+                  <th key={h} style={{ padding: "0 0 8px", textAlign: i === 0 ? "left" : "right",
+                    fontFamily: mono, fontWeight: 400, fontSize: 9, letterSpacing: "0.12em",
+                    textTransform: "uppercase", color: T.muted, borderBottom: `1px solid ${T.border}` }}>
+                    {h}
+                  </th>
+                ))}
               </tr>
-            );
-          })}
-          <tr>
-            <td colSpan={5} style={{ padding: "12px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: MUTED }}>Macaulay duration</td>
-            <td style={{ padding: "12px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: A, fontWeight: 500 }}>{macDur.toFixed(4)} yr</td>
-          </tr>
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {SPOT_RATES.map(s => {
+                const delta = s.spot - s.par;
+                return (
+                  <tr key={s.tenor} className="row-h">
+                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, color: T.muted, borderBottom: `1px solid ${T.border}` }}>{s.tenor}Y</td>
+                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, textAlign: "right", color: T.text, borderBottom: `1px solid ${T.border}` }}>{s.par.toFixed(2)}%</td>
+                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, textAlign: "right", color: T.blue, borderBottom: `1px solid ${T.border}` }}>{s.spot.toFixed(3)}%</td>
+                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, textAlign: "right",
+                      color: delta >= 0 ? T.green : T.red, borderBottom: `1px solid ${T.border}` }}>
+                      {delta >= 0 ? "+" : ""}{(delta * 100).toFixed(1)}bp
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {/* No-arbitrage note */}
+          <div style={{ marginTop: 16, padding: "12px 14px", background: T.blueLo, border: `1px solid ${T.border2}` }}>
+            <Label color={T.blue}>No-arbitrage condition</Label>
+            <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 1.8 }}>
+              (1+s₂)² = (1+s₁) × (1+f(1,2))<br />
+              f(T₁,T₂) = [(1+s₂)^T₂/(1+s₁)^T₁]^(1/(T₂−T₁)) − 1
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-/* ─── RISK TAB ────────────────────────────────────────────────────────────── */
-function RiskTab({ face, cr, periods, freq, ytm, notional }) {
-  const price     = calcPrice(face, cr, periods, freq, ytm);
-  const cfRows    = buildCashFlows(face, cr, periods, freq, ytm);
-  const macDur    = macaulayDuration(cfRows);
-  const modDur    = modifiedDuration(macDur, ytm, freq);
-  const dv01Bond  = dv01PerBond(modDur, price);
-  const posDv01   = positionDv01(dv01Bond, notional, face);
-  const scenarios = buildScenarios(face, cr, periods, freq, ytm, price, modDur);
-
-  const durData = cfRows.map(r => ({
-    label: r.tYr.toFixed(1),
-    contrib: +r.durContrib.toFixed(5),
-    isFinal: r.t === cfRows.length,
-  }));
-
+/* ─── NELSON-SIEGEL TAB ───────────────────────────────────────────────────── */
+function NelsonSiegelTab() {
   return (
-    <div style={{ padding: "36px 48px", overflowY: "auto" }}>
-
-      {/* Primary — Modified Duration */}
-      <div style={{ marginBottom: 36 }}>
-        <Label amber>Modified duration</Label>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 40, fontWeight: 300, color: A, letterSpacing: "-0.04em", lineHeight: 1 }}>
-          {modDur.toFixed(4)}
-        </div>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: MUTED, marginTop: 8 }}>
-          D_mac / (1 + {(ytm / freq * 100).toFixed(2)}%) = {macDur.toFixed(4)} / {(1 + ytm / freq).toFixed(4)}
-        </div>
+    <div className="fade-3" style={{ padding: "32px 44px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.amber }} />
+        <span style={{ fontFamily: mono, fontSize: 9, color: T.amber, letterSpacing: "0.16em", textTransform: "uppercase" }}>In Progress</span>
       </div>
-
-      {/* Secondary trio */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", marginBottom: 36 }}>
+      <div style={{ fontFamily: serif, fontSize: 32, color: T.text, marginBottom: 8 }}>Nelson-Siegel</div>
+      <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, marginBottom: 32, lineHeight: 1.8 }}>
+        Parametric curve fitting via scipy.optimize · Python implementation in progress
+      </div>
+      <Divider />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 28 }}>
         {[
-          ["Macaulay duration", `${macDur.toFixed(4)} yr`],
-          ["DV01 — per bond",   `$${dv01Bond.toFixed(4)}`],
-          [`DV01 — $${(notional/1e6).toFixed(0)}M position`, `$${posDv01.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`],
-        ].map(([l, v], i) => (
-          <div key={l} style={{ borderLeft: i > 0 ? `1px solid ${BORDER}` : "none", paddingLeft: i > 0 ? 28 : 0, paddingRight: 28 }}>
-            <Label>{l}</Label>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 18, color: TEXT, letterSpacing: "-0.01em" }}>{v}</div>
+          { label: "β₀ — level",      desc: "Long-run yield as τ→∞. The market's long-run rate expectation." },
+          { label: "β₁ — slope",      desc: "Short-end component. β₀ + β₁ gives the instantaneous short rate." },
+          { label: "β₂ — curvature",  desc: "Medium-term hump or trough. Controls the belly of the curve." },
+          { label: "λ — decay factor", desc: "Where the hump peaks. Free parameter — optimised alongside β coefficients." },
+        ].map(p => (
+          <div key={p.label} style={{ padding: "18px 20px", border: `1px solid ${T.border}` }}>
+            <div style={{ fontFamily: mono, fontSize: 9, color: T.muted, letterSpacing: "0.12em",
+              textTransform: "uppercase", marginBottom: 8 }}>{p.label}</div>
+            <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, lineHeight: 1.7 }}>{p.desc}</div>
           </div>
         ))}
       </div>
+      <div style={{ marginTop: 24, padding: "14px 18px", border: `1px solid ${T.border}`, background: T.surf }}>
+        <Label color={T.muted}>Formula</Label>
+        <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 2.2, marginTop: 4 }}>
+          y(τ) = β₀ + β₁·(1−e^(−τ/λ))/(τ/λ) + β₂·[(1−e^(−τ/λ))/(τ/λ) − e^(−τ/λ)]
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── PCA TAB ─────────────────────────────────────────────────────────────── */
+function PCATab() {
+  return (
+    <div className="fade-3" style={{ padding: "32px 44px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.amber }} />
+        <span style={{ fontFamily: mono, fontSize: 9, color: T.amber, letterSpacing: "0.16em", textTransform: "uppercase" }}>In Progress</span>
+      </div>
+      <div style={{ fontFamily: serif, fontSize: 32, color: T.text, marginBottom: 8 }}>PCA Decomposition</div>
+      <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, marginBottom: 32, lineHeight: 1.8 }}>
+        Eigendecomposition of historical yield curve changes · FRED data · Python implementation in progress
+      </div>
+      <Divider />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginTop: 28 }}>
+        {[
+          { label: "PC1 — Level",     pct: "~85% variance", desc: "All maturities shift together. The dominant factor — driven by Fed hike/cut cycles." },
+          { label: "PC2 — Slope",     pct: "~10% variance", desc: "Short and long ends move in opposite directions. Steepener / flattener trades." },
+          { label: "PC3 — Curvature", pct: "~3% variance",  desc: "Belly moves relative to wings. Butterfly trade: long 5Y, short 2Y and 10Y." },
+        ].map(p => (
+          <div key={p.label} style={{ padding: "18px 20px", border: `1px solid ${T.border}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontFamily: mono, fontSize: 9, color: T.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>{p.label}</div>
+              <div style={{ fontFamily: mono, fontSize: 9, color: T.muted }}>{p.pct}</div>
+            </div>
+            <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, lineHeight: 1.7 }}>{p.desc}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 24, padding: "14px 18px", border: `1px solid ${T.border}`, background: T.surf }}>
+        <Label color={T.muted}>Eigendecomposition</Label>
+        <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 2.2, marginTop: 4 }}>
+          Σ = V · Λ · Vᵀ &ensp;·&ensp; Σ = cov(Δyields) across maturities &ensp;·&ensp; columns of V = loading vectors
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── VASICEK TAB ─────────────────────────────────────────────────────────── */
+function VasicekTab() {
+  const [kappa,  setKappa]  = useState(0.30);
+  const [theta,  setTheta]  = useState(5.00);
+  const [sigma,  setSigma]  = useState(1.80);
+  const [r0,     setR0]     = useState(3.00);
+
+  const paths = genPaths(8, kappa, theta / 100, sigma / 100, r0 / 100);
+  const feller = 2 * kappa * (theta / 100) > Math.pow(sigma / 100, 2);
+  const ert    = theta + (r0 - theta) * Math.exp(-kappa);
+
+  return (
+    <div className="fade-3" style={{ padding: "32px 44px", overflowY: "auto", height: "100%" }}>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", marginBottom: 32 }}>
+        <div>
+          <Label color={T.blue}>Long-run mean θ</Label>
+          <div style={{ fontFamily: serif, fontSize: 44, color: T.blue, lineHeight: 1 }}>{theta.toFixed(2)}%</div>
+          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, marginTop: 6 }}>
+            E[r<sub>∞</sub>] = θ · rates revert here
+          </div>
+        </div>
+        <KpiBlock label="r₀ — today"      value={`${r0.toFixed(2)}%`}  sub="current short rate" />
+        <KpiBlock label="E[r] at 1Y"      value={`${ert.toFixed(3)}%`} sub="θ + (r₀−θ)·e^(−κ)" />
+        <KpiBlock label="Feller condition" value={feller ? "✓ holds" : "✗ fails"}
+          sub={feller ? "positive rates guaranteed (CIR)" : "negative rates possible"} />
+      </div>
 
       <Divider />
 
-      {/* Duration contribution chart */}
-      <Label>Duration contribution by period</Label>
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: MUTED, margin: "8px 0 20px" }}>
-        Each bar = <span style={{ color: A }}>t × PV(CFₜ) / P</span>
-        <span style={{ color: DIM }}> · </span>
-        bars sum to <span style={{ color: TEXT }}>{macDur.toFixed(4)} yr</span>
-      </div>
-      <ResponsiveContainer width="100%" height={160}>
-        <BarChart data={durData} margin={{ top: 4, right: 4, bottom: 4, left: 0 }} barSize={periods <= 5 ? 28 : 14}>
-          <XAxis dataKey="label" stroke={BORDER} tick={{ fill: MUTED, fontSize: 10, fontFamily: "'IBM Plex Mono', monospace" }} tickLine={false} axisLine={{ stroke: BORDER }} />
-          <YAxis stroke={BORDER} tick={{ fill: MUTED, fontSize: 10, fontFamily: "'IBM Plex Mono', monospace" }} tickLine={false} axisLine={false} width={40} />
-          <Tooltip content={<DurTooltip />} cursor={{ fill: "rgba(240,165,0,0.03)" }} />
-          <Bar dataKey="contrib" radius={[2, 2, 0, 0]}>
-            {durData.map((d, i) => <Cell key={i} fill={d.isFinal ? A : DIM} />)}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr", gap: 48 }}>
 
-      <Divider />
-
-      {/* Scenario chart */}
-      <Label>Rate shock scenarios</Label>
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: MUTED, margin: "8px 0 20px" }}>
-        <span style={{ color: A }}>Solid</span> = exact reprice
-        <span style={{ color: DIM }}> · </span>
-        <span style={{ color: MUTED }}>Faded</span> = duration approx
-        <span style={{ color: DIM }}> · </span>
-        gap = convexity benefit <span style={{ color: DIM }}>(Day 3)</span>
-      </div>
-      <ResponsiveContainer width="100%" height={200}>
-        <BarChart data={scenarios} margin={{ top: 4, right: 4, bottom: 4, left: 0 }} barGap={3} barSize={16}>
-          <XAxis dataKey="label" stroke={BORDER} tick={{ fill: MUTED, fontSize: 10, fontFamily: "'IBM Plex Mono', monospace" }} tickLine={false} axisLine={{ stroke: BORDER }} />
-          <YAxis stroke={BORDER} tick={{ fill: MUTED, fontSize: 10, fontFamily: "'IBM Plex Mono', monospace" }} tickLine={false} axisLine={false} width={52} tickFormatter={v => v.toFixed(1)} />
-          <Tooltip content={<ScenarioTooltip />} cursor={{ fill: "rgba(240,165,0,0.03)" }} />
-          <ReferenceLine y={0} stroke={BORDER} />
-          <Bar dataKey="exact" radius={[2, 2, 0, 0]}>
-            {scenarios.map((s, i) => <Cell key={i} fill={s.exact >= 0 ? A : R} />)}
-          </Bar>
-          <Bar dataKey="approx" radius={[2, 2, 0, 0]}>
-            {scenarios.map((s, i) => <Cell key={i} fill={s.approx >= 0 ? A + "33" : R + "33"} />)}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-
-      {/* Scenario table */}
-      <div style={{ marginTop: 24 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              {["Shock", "New YTM", "New price", "Δ Price", "Δ Price (approx)", "Error"].map((h, i) => (
-                <th key={h} style={{ padding: "0 0 10px", textAlign: i === 0 ? "left" : "right", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 400, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: MUTED, borderBottom: `1px solid ${BORDER}` }}>{h}</th>
+        {/* Path chart */}
+        <div>
+          <Label>Monte Carlo short rate paths</Label>
+          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 18px" }}>
+            dr = κ(θ−r)dt + σdW · 8 sample paths · mean reversion to&ensp;
+            <span style={{ color: T.blue }}>θ = {theta.toFixed(2)}%</span>
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="t" type="number" domain={[0, 5]} stroke={T.border}
+                tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
+                tickFormatter={v => `${v}Y`} tickLine={false} axisLine={{ stroke: T.border }} />
+              <YAxis stroke={T.border} tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
+                tickLine={false} axisLine={false} width={44} tickFormatter={v => `${v.toFixed(1)}%`} />
+              <ReferenceLine y={theta} stroke={T.blue} strokeDasharray="4 3" strokeOpacity={0.5} />
+              <Tooltip content={({ active, payload, label }) => active && payload?.length ? (
+                <div style={{ background: T.surf, border: `1px solid ${T.border2}`, padding: "8px 12px", fontFamily: mono, fontSize: 11 }}>
+                  <div style={{ color: T.blue, marginBottom: 4 }}>t = {parseFloat(label).toFixed(2)}Y</div>
+                  {payload.slice(0, 4).map((p, i) => (
+                    <div key={i} style={{ color: p.color }}>{p.value?.toFixed(3)}%</div>
+                  ))}
+                </div>
+              ) : null} cursor={{ stroke: T.border }} />
+              {paths.map((path, i) => (
+                <Line key={i} data={path} dataKey="r" type="monotone"
+                  stroke={PATH_COLORS[i]} strokeWidth={1} dot={false}
+                  strokeOpacity={0.65} name={`Path ${i + 1}`} />
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {scenarios.map(s => (
-              <tr key={s.bp} onMouseEnter={e => e.currentTarget.style.background = "#FFFFFF04"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TEXT, borderBottom: `1px solid ${BORDER}` }}>{s.label}</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: MUTED, borderBottom: `1px solid ${BORDER}` }}>{(s.newYTM * 100).toFixed(3)}%</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: TEXT, borderBottom: `1px solid ${BORDER}` }}>{s.exactP.toFixed(4)}</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: s.exact >= 0 ? A : R, borderBottom: `1px solid ${BORDER}` }}>{s.exact >= 0 ? "+" : ""}{s.exact.toFixed(4)}</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: MUTED, borderBottom: `1px solid ${BORDER}` }}>{s.approx >= 0 ? "+" : ""}{s.approx.toFixed(4)}</td>
-                <td style={{ padding: "8px 0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, textAlign: "right", color: DIM, borderBottom: `1px solid ${BORDER}` }}>{(s.exact - s.approx).toFixed(4)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: MUTED, marginTop: 10 }}>
-          Error = exact − duration approx. Always positive for option-free bonds — convexity benefit covered on Day 3.
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Parameter controls */}
+        <div>
+          <Label>Model parameters</Label>
+          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 18px" }}>
+            adjust to recalibrate paths in real time
+          </div>
+
+          {[
+            { label: "κ — mean reversion speed", value: kappa,  set: setKappa,  min: 0.01, max: 2.0,  step: 0.01, fmt: v => v.toFixed(2) },
+            { label: "θ — long-run mean (%)",    value: theta,  set: setTheta,  min: 0.5,  max: 10.0, step: 0.1,  fmt: v => v.toFixed(2) + "%" },
+            { label: "σ — volatility (%)",       value: sigma,  set: setSigma,  min: 0.1,  max: 5.0,  step: 0.05, fmt: v => v.toFixed(2) + "%" },
+            { label: "r₀ — initial rate (%)",    value: r0,     set: setR0,     min: 0.1,  max: 10.0, step: 0.1,  fmt: v => v.toFixed(2) + "%" },
+          ].map(({ label, value, set, min, max, step, fmt }) => (
+            <div key={label} style={{ marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <Label>{label}</Label>
+                <span style={{ fontFamily: mono, fontSize: 11, color: T.blue }}>{fmt(value)}</span>
+              </div>
+              <input type="range" min={min} max={max} step={step} value={value}
+                onChange={e => set(parseFloat(e.target.value))}
+                style={{ width: "100%", accentColor: T.blue, cursor: "pointer" }} />
+            </div>
+          ))}
+
+          <div style={{ padding: "12px 14px", background: feller ? T.blueLo : T.amberLo,
+            border: `1px solid ${feller ? T.border2 : T.amber}`, marginTop: 4, transition: "all 0.2s" }}>
+            <Label color={feller ? T.blue : T.amber}>
+              {feller ? "Feller condition satisfied" : "Feller condition violated"}
+            </Label>
+            <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 1.8 }}>
+              2κθ = {(2 * kappa * theta / 100).toFixed(4)}<br />
+              σ² = {Math.pow(sigma / 100, 2).toFixed(6)}<br />
+              {feller ? "CIR: positive rates guaranteed" : "Vasicek: negative rates possible"}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -360,121 +421,85 @@ function RiskTab({ face, cr, periods, freq, ytm, notional }) {
 
 /* ─── MAIN ────────────────────────────────────────────────────────────────── */
 export default function App() {
-  const [face,       setFace]       = useState(1000);
-  const [couponPct,  setCouponPct]  = useState(5.0);
-  const [periods,    setPeriods]    = useState(5);
-  const [freq,       setFreq]       = useState(2);
-  const [ytmPct,     setYtmPct]     = useState(6.0);
-  const [priceInput, setPriceInput] = useState("");
-  const [daysSince,  setDaysSince]  = useState(30);
-  const [daysInPer,  setDaysInPer]  = useState(180);
-  const [mode,       setMode]       = useState("price");
-  const [notional,   setNotional]   = useState(10000000);
-  const [activeTab,  setActiveTab]  = useState("pricing");
+  const [tab, setTab] = useState("bootstrap");
 
-  const cr  = couponPct / 100;
-  const ytm = mode === "price"
-    ? ytmPct / 100
-    : (() => { const p = parseFloat(priceInput); return isNaN(p) || p <= 0 ? cr : solveYTM(face, cr, periods, freq, p); })();
+  const TABS = [
+    { id: "bootstrap", l: "Bootstrapper",  done: true  },
+    { id: "ns",        l: "Nelson-Siegel", done: false },
+    { id: "pca",       l: "PCA",           done: false },
+    { id: "vasicek",   l: "Vasicek / CIR", done: true  },
+  ];
+
+  const spread = SPOT_RATES.find(s => s.tenor === 10).spot - SPOT_RATES.find(s => s.tenor === 2).spot;
 
   return (
-    <div style={{ background: BG, minHeight: "100vh", color: TEXT }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        input[type=number] { -moz-appearance: textfield; }
-        input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
-        body { background: ${BG}; }
-        @keyframes up { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
-      `}</style>
+    <div style={{ background: T.bg, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      <style>{css}</style>
 
-      {/* HEADER */}
-      <div style={{ borderBottom: `1px solid ${BORDER}`, padding: "0 40px", height: 52, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 2, height: 16, background: A }} />
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: TEXT }}>Bond Analytics</span>
-          <div style={{ width: 1, height: 14, background: BORDER }} />
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: "0.16em", color: MUTED }}>Project 1 · Day 2</span>
+      {/* ── HEADER ── */}
+      <div className="fade-1" style={{ borderBottom: `1px solid ${T.border}`, padding: "0 40px",
+        height: 48, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ width: 2, height: 18, background: T.blue }} />
+          <span style={{ fontFamily: serif, fontSize: 15, color: T.text }}>Yield Curve Suite</span>
+          <div style={{ width: 1, height: 14, background: T.border }} />
+          <span style={{ fontFamily: mono, fontSize: 9, letterSpacing: "0.18em",
+            textTransform: "uppercase", color: T.muted }}>Project 2 · Fixed Income</span>
         </div>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: "0.12em", color: MUTED }}>
-          {new Date().toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }).toUpperCase()}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+          <span style={{ fontFamily: mono, fontSize: 9, color: T.muted }}>
+            {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "2-digit", year: "numeric" }).toUpperCase()}
+          </span>
+          <div style={{ width: 1, height: 12, background: T.border }} />
+          <span style={{ fontFamily: mono, fontSize: 9, color: T.muted }}>github.com/aharode/yield-curve</span>
+        </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", minHeight: "calc(100vh - 52px)" }}>
-
-        {/* SIDEBAR */}
-        <div style={{ borderRight: `1px solid ${BORDER}`, padding: "32px 28px", overflowY: "auto" }}>
-          <ModeToggle value={mode} onChange={m => {
-            setMode(m);
-            if (m === "ytm" && !priceInput) setPriceInput(calcPrice(face, cr, periods, freq, ytmPct / 100).toFixed(4));
-          }} />
-
-          <Field label="Face value ($)"><NumInput value={face} onChange={v => setFace(parseFloat(v) || 0)} step={100} min={100} /></Field>
-          <Field label="Coupon rate (% p.a.)"><NumInput value={couponPct} onChange={v => setCouponPct(parseFloat(v) || 0)} step={0.25} min={0} max={30} /></Field>
-          <Field label="Years to maturity"><NumInput value={periods} onChange={v => setPeriods(parseInt(v) || 1)} step={1} min={1} max={50} /></Field>
-          <Field label="Frequency"><FreqToggle value={freq} onChange={setFreq} /></Field>
-          {mode === "price"
-            ? <Field label="YTM (% p.a.)"><NumInput value={ytmPct} onChange={v => setYtmPct(parseFloat(v) || 0)} step={0.1} min={0.01} /></Field>
-            : <Field label="Market price ($)"><NumInput value={priceInput} onChange={setPriceInput} step={0.01} min={0.01} /></Field>
-          }
-
-          <Divider />
-
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: A, marginBottom: 14 }}>Accrued interest</div>
-          <Field label="Days since last coupon"><NumInput value={daysSince} onChange={v => setDaysSince(parseInt(v) || 0)} step={1} min={0} /></Field>
-          <Field label="Days in coupon period"><NumInput value={daysInPer} onChange={v => setDaysInPer(parseInt(v) || 1)} step={1} min={1} /></Field>
-
-          <Divider />
-
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: A, marginBottom: 14 }}>Position size</div>
-          <Field label="Notional face value ($)"><NumInput value={notional} onChange={v => setNotional(parseFloat(v) || 0)} step={1000000} min={0} /></Field>
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: MUTED, marginTop: -14, marginBottom: 20 }}>
-            ${(notional / 1e6).toFixed(0)}M · {(notional / face).toLocaleString()} bonds
+      {/* ── STATUS BAR ── */}
+      <div className="fade-2" style={{ borderBottom: `1px solid ${T.border}`, padding: "0 40px",
+        height: 30, display: "flex", alignItems: "center", background: T.surf, flexShrink: 0 }}>
+        {[
+          ["2Y",    `${SPOT_RATES.find(s=>s.tenor===2).spot.toFixed(2)}%`],
+          ["5Y",    `${SPOT_RATES.find(s=>s.tenor===5).spot.toFixed(2)}%`],
+          ["10Y",   `${SPOT_RATES.find(s=>s.tenor===10).spot.toFixed(2)}%`],
+          ["30Y",   `${SPOT_RATES.find(s=>s.tenor===30).spot.toFixed(2)}%`],
+          ["2s10s", `${spread >= 0 ? "+" : ""}${(spread * 100).toFixed(0)}bp`],
+          ["Source","US Treasury · bootstrapped"],
+        ].map(([k, v], i) => (
+          <div key={k} style={{ display: "flex", alignItems: "center" }}>
+            {i > 0 && <div style={{ width: 1, height: 12, background: T.border, margin: "0 14px" }} />}
+            <span style={{ fontFamily: mono, fontSize: 9, color: T.muted, marginRight: 6,
+              letterSpacing: "0.1em", textTransform: "uppercase" }}>{k}</span>
+            <span style={{ fontFamily: mono, fontSize: 10, color: T.blue, fontWeight: 500 }}>{v}</span>
           </div>
+        ))}
+      </div>
 
-          <Divider />
+      {/* ── TAB BAR ── */}
+      <div className="fade-2" style={{ borderBottom: `1px solid ${T.border}`, display: "flex",
+        paddingLeft: 40, flexShrink: 0 }}>
+        {TABS.map(({ id, l, done }) => (
+          <button key={id} className="tab-btn" onClick={() => setTab(id)} style={{
+            padding: "13px 0", marginRight: 28, marginBottom: -1,
+            background: "transparent", border: "none",
+            borderBottom: `1px solid ${tab === id ? (done ? T.blue : T.amber) : "transparent"}`,
+            color: tab === id ? (done ? T.blue : T.amber) : T.muted,
+            fontFamily: mono, fontSize: 9, letterSpacing: "0.16em",
+            textTransform: "uppercase", cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 7,
+          }}>
+            {!done && <span style={{ width: 4, height: 4, borderRadius: "50%", background: T.amber, flexShrink: 0, marginBottom: 1 }} />}
+            {l}
+          </button>
+        ))}
+      </div>
 
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: DIM, lineHeight: 2.4 }}>
-            <div>D_mac = Σ t · PV(CFₜ) / P</div>
-            <div>D_mod = D_mac / (1 + y/freq)</div>
-            <div>DV01  = D_mod · P · 0.0001</div>
-            <div>Pos   = DV01 · (N / F)</div>
-          </div>
-        </div>
-
-        {/* MAIN */}
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          {/* Tabs */}
-          <div style={{ borderBottom: `1px solid ${BORDER}`, display: "flex", paddingLeft: 48 }}>
-            {[{ id: "pricing", l: "Pricing" }, { id: "risk", l: "Risk & Duration" }].map(({ id, l }) => (
-              <button key={id} onClick={() => setActiveTab(id)} style={{
-                padding: "16px 0",
-                marginRight: 32,
-                marginBottom: -1,
-                background: "transparent",
-                border: "none",
-                borderBottom: `1px solid ${activeTab === id ? A : "transparent"}`,
-                color: activeTab === id ? A : MUTED,
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
-                letterSpacing: "0.16em",
-                textTransform: "uppercase",
-                cursor: "pointer",
-                transition: "all 0.15s",
-              }}>
-                {l}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ flex: 1, overflowY: "auto" }}>
-            {activeTab === "pricing"
-              ? <PricingTab face={face} cr={cr} periods={periods} freq={freq} ytm={ytm} mode={mode} daysSince={daysSince} daysInPer={daysInPer} />
-              : <RiskTab face={face} cr={cr} periods={periods} freq={freq} ytm={ytm} notional={notional} />
-            }
-          </div>
-        </div>
+      {/* ── CONTENT ── */}
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+        {tab === "bootstrap" && <BootstrapTab />}
+        {tab === "ns"        && <NelsonSiegelTab />}
+        {tab === "pca"       && <PCATab />}
+        {tab === "vasicek"   && <VasicekTab />}
       </div>
     </div>
   );
