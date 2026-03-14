@@ -1,41 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid, Cell,
 } from "recharts";
-
-/* ─── BOOTSTRAPPER DATA (stub — Treasury API wired in next build) ── */
-
-const SPOT_RATES = [
-  { tenor: 0.5, par: 5.30, spot: 5.32, fwd: 5.32 },
-  { tenor: 1,   par: 5.10, spot: 5.14, fwd: 4.96 },
-  { tenor: 2,   par: 4.80, spot: 4.86, fwd: 4.58 },
-  { tenor: 3,   par: 4.65, spot: 4.72, fwd: 4.46 },
-  { tenor: 5,   par: 4.50, spot: 4.59, fwd: 4.47 },
-  { tenor: 7,   par: 4.55, spot: 4.65, fwd: 4.86 },
-  { tenor: 10,  par: 4.60, spot: 4.72, fwd: 4.98 },
-  { tenor: 20,  par: 4.80, spot: 4.96, fwd: 5.42 },
-  { tenor: 30,  par: 4.90, spot: 5.08, fwd: 5.64 },
-];
-
-// Vasicek Monte Carlo paths — computed client-side from the SDE
-function genPaths(n = 8, kappa = 0.3, theta = 0.05, sigma = 0.018, r0 = 0.03) {
-  const paths = [];
-  for (let p = 0; p < n; p++) {
-    let r = r0 + (Math.random() - 0.5) * 0.005;
-    const path = [];
-    for (let t = 0; t <= 60; t++) {
-      const dW = (Math.random() * 2 - 1) * Math.sqrt(1 / 12);
-      r = Math.max(0, r + kappa * (theta - r) / 12 + sigma * dW);
-      if (t % 2 === 0) path.push({ t: +(t / 12).toFixed(2), r: +(r * 100).toFixed(3) });
-    }
-    paths.push(path);
-  }
-  return paths;
-}
-const VASICEK_PATHS = genPaths();
-const PATH_COLORS = ["#2A8FD4","#1AADAD","#4A8EC0","#2A9070","#5090D0","#1A9898","#3A80B8","#2A8060"];
 
 /* ─── DESIGN TOKENS ───────────────────────────────────────────────────────── */
 const T = {
@@ -46,7 +14,6 @@ const T = {
   border2: "#243040",
   text:    "#D0D8E4",
   muted:   "#48586A",
-  dim:     "#1A2230",
   blue:    "#2A8FD4",
   blueLo:  "#0D2840",
   cyan:    "#1AADAD",
@@ -56,75 +23,233 @@ const T = {
   amber:   "#C07818",
   amberLo: "#301A04",
 };
-
 const mono  = "'IBM Plex Mono', monospace";
 const serif = "'DM Serif Display', Georgia, serif";
+
+/* ─── TREASURY FETCH ──────────────────────────────────────────────────────── */
+const TENOR_MAP = {
+  BC_1MONTH: 1/12, BC_3MONTH: 0.25, BC_6MONTH: 0.5,
+  BC_1YEAR: 1, BC_2YEAR: 2, BC_3YEAR: 3, BC_5YEAR: 5,
+  BC_7YEAR: 7, BC_10YEAR: 10, BC_20YEAR: 20, BC_30YEAR: 30,
+};
+
+async function fetchTreasuryYields() {
+  const now   = new Date();
+  const month = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const url   = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value_month=${month}`;
+  const res   = await fetch(url);
+  const text  = await res.text();
+  const parser = new DOMParser();
+  const doc    = parser.parseFromString(text, "application/xml");
+  const entries = doc.querySelectorAll("entry");
+  if (!entries.length) throw new Error("No entries in XML");
+  const entry   = entries[entries.length - 1];
+  const content = entry.querySelector("content") || entry;
+  const date    = content.querySelector("NEW_DATE")?.textContent?.slice(0, 10) || "unknown";
+  const yields  = {};
+  for (const [field, tenor] of Object.entries(TENOR_MAP)) {
+    const el  = content.querySelector(field);
+    const val = el ? parseFloat(el.textContent) : null;
+    if (val !== null && !isNaN(val)) yields[tenor] = val;
+  }
+  return { date, yields };
+}
+
+/* ─── BOOTSTRAP (JS port of bootstrapper.py) ─────────────────────────────── */
+function getInterpolatedSpot(spots, tenor) {
+  if (spots[tenor] !== undefined) return spots[tenor];
+  const keys = Object.keys(spots).map(Number).sort((a, b) => a - b);
+  if (!keys.length) return 0;
+  if (tenor <= keys[0]) return spots[keys[0]];
+  if (tenor >= keys[keys.length - 1]) return spots[keys[keys.length - 1]];
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (tenor >= keys[i] && tenor <= keys[i + 1]) {
+      const t = (tenor - keys[i]) / (keys[i + 1] - keys[i]);
+      return spots[keys[i]] + t * (spots[keys[i + 1]] - spots[keys[i]]);
+    }
+  }
+  return spots[keys[keys.length - 1]];
+}
+
+function bootstrapSpots(parYields) {
+  const spots = {};
+  for (let i = 0; i < parYields.length; i++) {
+    const [T_n, par] = parYields[i];
+    const N = T_n * 2;
+    const c = par / 2 / 100;
+    if (N <= 1) { spots[T_n] = par; continue; }
+    let pvCoupons = 0;
+    for (let k = 1; k < N; k++) {
+      const t_k = k / 2;
+      const s_k = getInterpolatedSpot(spots, t_k) / 100;
+      pvCoupons += c / Math.pow(1 + s_k / 2, k);
+    }
+    const rhs = 1 - pvCoupons;
+    if (rhs <= 0) { spots[T_n] = par; continue; }
+    const s_N = 2 * (Math.pow((1 + c) / rhs, 1 / N) - 1) * 100;
+    spots[T_n] = isFinite(s_N) ? s_N : par;
+  }
+  return spots;
+}
+
+function spotsToForwards(spots) {
+  const keys = Object.keys(spots).map(Number).sort((a, b) => a - b);
+  const fwds = {};
+  fwds[keys[0]] = spots[keys[0]];
+  for (let i = 1; i < keys.length; i++) {
+    const T1 = keys[i - 1], T2 = keys[i];
+    const s1 = spots[T1] / 100, s2 = spots[T2] / 100;
+    const n1 = T1 * 2, n2 = T2 * 2, dn = n2 - n1;
+    const fwd = 2 * (Math.pow(Math.pow(1 + s2/2, n2) / Math.pow(1 + s1/2, n1), 1/dn) - 1) * 100;
+    fwds[T2] = isFinite(fwd) ? fwd : spots[T2];
+  }
+  return fwds;
+}
+
+/* ─── NELSON-SIEGEL (JS port) ─────────────────────────────────────────────── */
+function nsYield(tau, b0, b1, b2, lam) {
+  if (tau <= 0) return b0 + b1;
+  const x = tau / lam, e = Math.exp(-x);
+  const f1 = (1 - e) / x, f2 = f1 - e;
+  return b0 + b1 * f1 + b2 * f2;
+}
+
+function invert3x3(M) {
+  const A = M.map((row, i) => [...row, ...Array.from({ length: 3 }, (_, j) => i === j ? 1 : 0)]);
+  for (let col = 0; col < 3; col++) {
+    const pivot = [col, col+1, col+2].reduce((p, r) =>
+      Math.abs(A[r]?.[col] ?? 0) > Math.abs(A[p][col]) ? r : p, col);
+    [A[col], A[pivot]] = [A[pivot], A[col]];
+    if (Math.abs(A[col][col]) < 1e-12) return null;
+    const div = A[col][col];
+    A[col] = A[col].map(v => v / div);
+    for (let row = 0; row < 3; row++) {
+      if (row !== col) { const f = A[row][col]; A[row] = A[row].map((v, j) => v - f * A[col][j]); }
+    }
+  }
+  return A.map(row => row.slice(3));
+}
+
+function fitNS(tenors, yields) {
+  let best = null, bestSSE = Infinity;
+  const lamGrid = Array.from({ length: 40 }, (_, i) => 0.1 * Math.pow(100, i/39));
+  for (const lam of lamGrid) {
+    const X = tenors.map(tau => {
+      if (tau <= 0) return [1, 1, 0];
+      const x = tau/lam, e = Math.exp(-x), f1 = (1-e)/x, f2 = f1-e;
+      return [1, f1, f2];
+    });
+    const n = tenors.length, k = 3;
+    const XtX = Array.from({length:k}, (_,r) => Array.from({length:k}, (_,c) => X.reduce((s,row)=>s+row[r]*row[c],0)));
+    const Xty = Array.from({length:k}, (_,r) => X.reduce((s,row,i)=>s+row[r]*yields[i],0));
+    const inv = invert3x3(XtX);
+    if (!inv) continue;
+    const [b0,b1,b2] = Array.from({length:k}, (_,r) => inv[r].reduce((s,v,c)=>s+v*Xty[c],0));
+    const sse = tenors.reduce((s,t,i)=>s+(yields[i]-nsYield(t,b0,b1,b2,lam))**2, 0);
+    if (sse < bestSSE) { bestSSE = sse; best = {b0,b1,b2,lam}; }
+  }
+  return best || {b0:4.5,b1:-0.3,b2:0.5,lam:2.5};
+}
+
+/* ─── PCA (JS port) ───────────────────────────────────────────────────────── */
+function buildHistoricalMatrix(parYields) {
+  const n = 252;
+  const base = parYields.map(([,y]) => y);
+  let level = 0;
+  return Array.from({length: n}, () => {
+    const lvl = (Math.random()-0.5)*0.04;
+    const slp = (Math.random()-0.5)*0.02;
+    level += (Math.random()-0.5)*0.01;
+    return parYields.map(([tenor],i) => {
+      const normT = (tenor-1)/29;
+      return base[i] + level + lvl + slp*(normT-0.5) + (Math.random()-0.5)*0.01;
+    });
+  });
+}
+
+function runPCA(matrix, m) {
+  const n   = matrix.length - 1;
+  const delta = matrix.slice(1).map((row,t) => row.map((v,j) => v - matrix[t][j]));
+  const means = Array.from({length:m}, (_,j) => delta.reduce((s,r)=>s+r[j],0)/n);
+  const dm    = delta.map(row => row.map((v,j) => v - means[j]));
+  const cov   = Array.from({length:m}, (_,i) => Array.from({length:m}, (_,j) =>
+    dm.reduce((s,r) => s+r[i]*r[j], 0)/(n-1)));
+
+  const pcs = [];
+  let defl = cov.map(r=>[...r]);
+  for (let k = 0; k < 3; k++) {
+    let v = Array.from({length:m}, (_,i) => i===k ? 1 : 0.1);
+    for (let iter = 0; iter < 200; iter++) {
+      v = defl.map(row => row.reduce((s,val,j)=>s+val*v[j],0));
+      const norm = Math.sqrt(v.reduce((s,x)=>s+x*x,0));
+      v = v.map(x=>x/norm);
+    }
+    const ev = v.reduce((s,vi,i)=>s+vi*defl[i].reduce((ss,val,j)=>ss+val*v[j],0),0);
+    if (k===0 && v.reduce((s,x)=>s+x,0)<0) v=v.map(x=>-x);
+    if (k===1 && v[0]>0) v=v.map(x=>-x);
+    pcs.push({loading: v.map(x=>+x.toFixed(4)), eigenval: Math.abs(ev)});
+    defl = defl.map((row,i)=>row.map((val,j)=>val-ev*v[i]*v[j]));
+  }
+  const total = pcs.reduce((s,p)=>s+p.eigenval,0)+1e-6;
+  return pcs.map(p=>({loading:p.loading, variancePct:+(p.eigenval/total*100).toFixed(1)}));
+}
+
+/* ─── VASICEK ─────────────────────────────────────────────────────────────── */
+function boxMuller() {
+  return Math.sqrt(-2*Math.log(Math.random()))*Math.cos(2*Math.PI*Math.random());
+}
+function genPaths(n=8, kappa=0.3, theta=0.05, sigma=0.018, r0=0.03) {
+  return Array.from({length:n}, () => {
+    let r = r0 + (Math.random()-0.5)*0.002;
+    return Array.from({length:31}, (_,t) => {
+      r = r + kappa*(theta-r)/12 + sigma*Math.sqrt(1/12)*boxMuller();
+      return {t:+(t*2/12).toFixed(2), r:+(r*100).toFixed(3)};
+    });
+  });
+}
+const PATH_COLORS = ["#2A8FD4","#1AADAD","#4A8EC0","#2A9070","#5090D0","#1A9898","#3A80B8","#2A8060"];
 
 /* ─── GLOBAL CSS ──────────────────────────────────────────────────────────── */
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Serif+Display:ital@0;1&display=swap');
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  input[type=number] { -moz-appearance: textfield; }
-  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
-  html, body { background: ${T.bg}; color: ${T.text}; }
-  ::-webkit-scrollbar { width: 3px; background: transparent; }
-  ::-webkit-scrollbar-thumb { background: ${T.border2}; border-radius: 2px; }
-
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
-
-  .fade-1 { animation: fadeUp 0.3s 0.00s both; }
-  .fade-2 { animation: fadeUp 0.3s 0.06s both; }
-  .fade-3 { animation: fadeUp 0.3s 0.12s both; }
-  .fade-4 { animation: fadeUp 0.3s 0.18s both; }
-
-  .tab-btn { transition: color 0.12s, border-color 0.12s; }
-  .tab-btn:hover { color: ${T.text} !important; }
-
-  .row-h { transition: background 0.08s; }
-  .row-h:hover { background: rgba(42,143,212,0.05) !important; }
-
-  .live { animation: pulse 2.5s infinite; }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+  html,body{background:${T.bg};color:${T.text};}
+  ::-webkit-scrollbar{width:3px;background:transparent;}
+  ::-webkit-scrollbar-thumb{background:${T.border2};border-radius:2px;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .fade-1{animation:fadeUp 0.3s 0.00s both;}
+  .fade-2{animation:fadeUp 0.3s 0.06s both;}
+  .fade-3{animation:fadeUp 0.3s 0.12s both;}
+  .tab-btn{transition:color 0.12s,border-color 0.12s;}
+  .row-h{transition:background 0.08s;}
+  .row-h:hover{background:rgba(42,143,212,0.05)!important;}
+  .spinner{width:14px;height:14px;border:2px solid ${T.border2};border-top-color:${T.blue};border-radius:50%;animation:spin 0.7s linear infinite;display:inline-block;}
 `;
 
 /* ─── PRIMITIVES ──────────────────────────────────────────────────────────── */
-function Label({ children, color, size = 9 }) {
+function Label({children,color,size=9}){
+  return <div style={{fontFamily:mono,fontSize:size,letterSpacing:"0.16em",textTransform:"uppercase",color:color||T.muted,marginBottom:5}}>{children}</div>;
+}
+function Divider({my=24}){return <div style={{height:1,background:T.border,margin:`${my}px 0`}}/>;}
+function KpiBlock({label,value,sub}){
   return (
-    <div style={{ fontFamily: mono, fontSize: size, letterSpacing: "0.16em",
-      textTransform: "uppercase", color: color || T.muted, marginBottom: 5 }}>
-      {children}
+    <div style={{borderLeft:`1px solid ${T.border}`,paddingLeft:20,paddingRight:20}}>
+      <Label>{label}</Label>
+      <div style={{fontFamily:serif,fontSize:22,color:T.text,lineHeight:1,letterSpacing:"-0.01em"}}>{value}</div>
+      {sub && <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:5}}>{sub}</div>}
     </div>
   );
 }
-
-function Divider({ my = 24 }) {
-  return <div style={{ height: 1, background: T.border, margin: `${my}px 0` }} />;
-}
-
-function KpiBlock({ label, value, sub, accent }) {
+function ChartTip({active,payload,label,suffix=""}){
+  if (!active||!payload?.length) return null;
   return (
-    <div style={{ borderLeft: `1px solid ${T.border}`, paddingLeft: 20, paddingRight: 20 }}>
-      <Label color={accent ? T.blue : T.muted}>{label}</Label>
-      <div style={{ fontFamily: serif, fontSize: accent ? 44 : 22, color: accent ? T.blue : T.text,
-        fontWeight: 400, lineHeight: 1, letterSpacing: "-0.01em" }}>
-        {value}
-      </div>
-      {sub && <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, marginTop: 5 }}>{sub}</div>}
-    </div>
-  );
-}
-
-function ChartTooltip({ active, payload, label, suffix = "" }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{ background: T.surf, border: `1px solid ${T.border2}`, padding: "10px 14px", fontFamily: mono, fontSize: 11 }}>
-      <div style={{ color: T.blue, marginBottom: 6 }}>{label}{suffix}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ color: p.color, marginBottom: 2 }}>
-          <span style={{ color: T.muted }}>{p.name}: </span>{typeof p.value === "number" ? p.value.toFixed(3) : p.value}
+    <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"10px 14px",fontFamily:mono,fontSize:11}}>
+      <div style={{color:T.blue,marginBottom:6}}>{label}{suffix}</div>
+      {payload.map((p,i)=>(
+        <div key={i} style={{color:p.color,marginBottom:2}}>
+          <span style={{color:T.muted}}>{p.name}: </span>
+          {typeof p.value==="number"?p.value.toFixed(3):p.value}
         </div>
       ))}
     </div>
@@ -132,103 +257,101 @@ function ChartTooltip({ active, payload, label, suffix = "" }) {
 }
 
 /* ─── BOOTSTRAP TAB ───────────────────────────────────────────────────────── */
-function BootstrapTab() {
-  const spread_2s10s = SPOT_RATES.find(s => s.tenor === 10).spot - SPOT_RATES.find(s => s.tenor === 2).spot;
-  const CustomDot = ({ cx, cy }) => (
-    <circle cx={cx} cy={cy} r={3} fill={T.bg} stroke={T.blue} strokeWidth={1.5} />
+function BootstrapTab({curveData,loading,error,date}){
+  if(loading) return (
+    <div className="fade-3" style={{padding:"48px 44px",display:"flex",alignItems:"center",gap:14}}>
+      <div className="spinner"/>
+      <span style={{fontFamily:mono,fontSize:11,color:T.muted}}>fetching US Treasury yield curve...</span>
+    </div>
   );
 
-  return (
-    <div className="fade-3" style={{ padding: "32px 44px", overflowY: "auto", height: "100%" }}>
+  const rows   = curveData;
+  const spread = (rows.find(r=>r.tenor===10)?.spot??0)-(rows.find(r=>r.tenor===2)?.spot??0);
+  const CustomDot = ({cx,cy}) => <circle cx={cx} cy={cy} r={3} fill={T.bg} stroke={T.blue} strokeWidth={1.5}/>;
 
-      {/* KPI row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", marginBottom: 32, borderLeft: "none" }}>
+  return (
+    <div className="fade-3" style={{padding:"32px 44px",overflowY:"auto",height:"100%"}}>
+      {error && (
+        <div style={{padding:"10px 14px",background:T.amberLo,border:`1px solid ${T.amber}`,marginBottom:24,fontFamily:mono,fontSize:10,color:T.amber,lineHeight:1.8}}>
+          ⚠ CORS blocked — showing fallback data. Run <span style={{color:T.blue}}>python data/fetch.py</span> + redeploy for live data.
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",marginBottom:32}}>
         <div>
           <Label color={T.blue}>2s10s spread</Label>
-          <div style={{ fontFamily: serif, fontSize: 44, color: spread_2s10s >= 0 ? T.blue : T.red, lineHeight: 1 }}>
-            {spread_2s10s >= 0 ? "+" : ""}{(spread_2s10s * 100).toFixed(0)} bps
+          <div style={{fontFamily:serif,fontSize:44,color:spread>=0?T.blue:T.red,lineHeight:1}}>
+            {spread>=0?"+":""}{(spread*100).toFixed(0)} bps
           </div>
-          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, marginTop: 6 }}>
-            {spread_2s10s >= 0 ? "normal · upward sloping" : "inverted · recession signal"}
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>
+            {spread>=0?"normal · upward sloping":"inverted · recession signal"}
           </div>
         </div>
-        <KpiBlock label="2Y spot"  value={`${SPOT_RATES.find(s => s.tenor === 2).spot.toFixed(3)}%`} />
-        <KpiBlock label="10Y spot" value={`${SPOT_RATES.find(s => s.tenor === 10).spot.toFixed(3)}%`} />
-        <KpiBlock label="30Y spot" value={`${SPOT_RATES.find(s => s.tenor === 30).spot.toFixed(3)}%`} />
+        <KpiBlock label="2Y spot"  value={`${rows.find(r=>r.tenor===2)?.spot.toFixed(3)??"—"}%`}/>
+        <KpiBlock label="10Y spot" value={`${rows.find(r=>r.tenor===10)?.spot.toFixed(3)??"—"}%`}/>
+        <KpiBlock label="30Y spot" value={`${rows.find(r=>r.tenor===30)?.spot.toFixed(3)??"—"}%`}/>
       </div>
 
-      <Divider />
+      <Divider/>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr", gap: 48 }}>
-
-        {/* Curve chart */}
+      <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:48}}>
         <div>
           <Label>Par · spot · forward curves</Label>
-          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 18px" }}>
-            <span style={{ color: T.blue }}>——</span>&ensp;Spot (zero)&emsp;
-            <span style={{ color: T.cyan }}>——</span>&ensp;Par&emsp;
-            <span style={{ color: T.muted }}>– –</span>&ensp;Forward&emsp;
-            · bootstrapped recursively from par yields
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
+            <span style={{color:T.blue}}>——</span>&ensp;Spot&emsp;
+            <span style={{color:T.cyan}}>——</span>&ensp;Par&emsp;
+            <span style={{color:T.muted}}>– –</span>&ensp;Forward
           </div>
           <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={SPOT_RATES} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
-              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="tenor" stroke={T.border}
-                tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
-                tickFormatter={v => `${v}Y`} tickLine={false} axisLine={{ stroke: T.border }} />
-              <YAxis stroke={T.border}
-                tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
-                tickLine={false} axisLine={false} width={44}
-                domain={[4.2, 5.8]} tickFormatter={v => `${v.toFixed(1)}%`} />
-              <Tooltip content={<ChartTooltip suffix="Y" />} cursor={{ stroke: T.border }} />
-              <Line type="monotone" dataKey="spot" stroke={T.blue}  strokeWidth={2}   dot={<CustomDot />} name="Spot" />
-              <Line type="monotone" dataKey="par"  stroke={T.cyan}  strokeWidth={1.5} dot={false} name="Par" />
-              <Line type="monotone" dataKey="fwd"  stroke={T.muted} strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="Forward" />
+            <LineChart data={rows} margin={{top:4,right:8,bottom:4,left:8}}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="tenor" type="number" domain={[0,31]} stroke={T.border}
+                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickLine={false} axisLine={false} width={44} tickFormatter={v=>`${v.toFixed(1)}%`}/>
+              <Tooltip content={<ChartTip suffix="Y"/>} cursor={{stroke:T.border}}/>
+              <Line type="monotone" dataKey="spot" stroke={T.blue}  strokeWidth={2}   dot={<CustomDot/>} name="Spot"/>
+              <Line type="monotone" dataKey="par"  stroke={T.cyan}  strokeWidth={1.5} dot={false} name="Par"/>
+              <Line type="monotone" dataKey="fwd"  stroke={T.muted} strokeWidth={1.5} dot={false} strokeDasharray="5 4" name="Forward"/>
             </LineChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Spot rate table */}
         <div>
           <Label>Bootstrapped spot rates</Label>
-          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 14px" }}>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 14px"}}>
             recursive extraction · semi-annual compounding
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                {["Tenor", "Par", "Spot", "Δ"].map((h, i) => (
-                  <th key={h} style={{ padding: "0 0 8px", textAlign: i === 0 ? "left" : "right",
-                    fontFamily: mono, fontWeight: 400, fontSize: 9, letterSpacing: "0.12em",
-                    textTransform: "uppercase", color: T.muted, borderBottom: `1px solid ${T.border}` }}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr>
+              {["Tenor","Par","Spot","Δ"].map((h,i)=>(
+                <th key={h} style={{padding:"0 0 8px",textAlign:i===0?"left":"right",
+                  fontFamily:mono,fontWeight:400,fontSize:9,letterSpacing:"0.12em",
+                  textTransform:"uppercase",color:T.muted,borderBottom:`1px solid ${T.border}`}}>{h}</th>
+              ))}
+            </tr></thead>
             <tbody>
-              {SPOT_RATES.map(s => {
-                const delta = s.spot - s.par;
+              {rows.map(s=>{
+                const d = s.spot-s.par;
                 return (
                   <tr key={s.tenor} className="row-h">
-                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, color: T.muted, borderBottom: `1px solid ${T.border}` }}>{s.tenor}Y</td>
-                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, textAlign: "right", color: T.text, borderBottom: `1px solid ${T.border}` }}>{s.par.toFixed(2)}%</td>
-                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, textAlign: "right", color: T.blue, borderBottom: `1px solid ${T.border}` }}>{s.spot.toFixed(3)}%</td>
-                    <td style={{ padding: "7px 0", fontFamily: mono, fontSize: 11, textAlign: "right",
-                      color: delta >= 0 ? T.green : T.red, borderBottom: `1px solid ${T.border}` }}>
-                      {delta >= 0 ? "+" : ""}{(delta * 100).toFixed(1)}bp
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,color:T.muted,borderBottom:`1px solid ${T.border}`}}>{s.tenor}Y</td>
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,textAlign:"right",color:T.text,borderBottom:`1px solid ${T.border}`}}>{s.par.toFixed(2)}%</td>
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,textAlign:"right",color:T.blue,borderBottom:`1px solid ${T.border}`}}>{s.spot.toFixed(3)}%</td>
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,textAlign:"right",
+                      color:d>=0?T.green:T.red,borderBottom:`1px solid ${T.border}`}}>
+                      {d>=0?"+":""}{(d*100).toFixed(1)}bp
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-
-          {/* No-arbitrage note */}
-          <div style={{ marginTop: 16, padding: "12px 14px", background: T.blueLo, border: `1px solid ${T.border2}` }}>
+          <div style={{marginTop:16,padding:"12px 14px",background:T.blueLo,border:`1px solid ${T.border2}`}}>
             <Label color={T.blue}>No-arbitrage condition</Label>
-            <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 1.8 }}>
-              (1+s₂)² = (1+s₁) × (1+f(1,2))<br />
+            <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.8}}>
+              (1+s₂)² = (1+s₁) × (1+f(1,2))<br/>
               f(T₁,T₂) = [(1+s₂)^T₂/(1+s₁)^T₁]^(1/(T₂−T₁)) − 1
             </div>
           </div>
@@ -239,36 +362,111 @@ function BootstrapTab() {
 }
 
 /* ─── NELSON-SIEGEL TAB ───────────────────────────────────────────────────── */
-function NelsonSiegelTab() {
+function NelsonSiegelTab({curveData}){
+  const [params, setParams] = useState(null);
+  const [manual, setManual] = useState(null);
+
+  useEffect(()=>{
+    if (!curveData.length) return;
+    const tenors = curveData.map(r=>r.tenor);
+    const yields = curveData.map(r=>r.spot);
+    const fitted = fitNS(tenors, yields);
+    setParams(fitted);
+    setManual(fitted);
+  }, [curveData]);
+
+  if (!manual) return (
+    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.muted}}>
+      <div className="spinner"/> &ensp;Fitting Nelson-Siegel…
+    </div>
+  );
+
+  const {b0,b1,b2,lam} = manual;
+  const tenors = curveData.map(r=>r.tenor);
+  const yields = curveData.map(r=>r.spot);
+  const fittedCurve = Array.from({length:120},(_,i)=>{
+    const tau = (i+1)*0.25;
+    return {tenor:+tau.toFixed(2), fitted:+nsYield(tau,b0,b1,b2,lam).toFixed(4)};
+  });
+  const observed = curveData.map(r=>({tenor:r.tenor,observed:r.spot}));
+  const rmse = Math.sqrt(tenors.reduce((s,t,i)=>s+(yields[i]-nsYield(t,b0,b1,b2,lam))**2,0)/tenors.length)*100;
+
   return (
-    <div className="fade-3" style={{ padding: "32px 44px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-        <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.amber }} />
-        <span style={{ fontFamily: mono, fontSize: 9, color: T.amber, letterSpacing: "0.16em", textTransform: "uppercase" }}>In Progress</span>
+    <div className="fade-3" style={{padding:"32px 44px",overflowY:"auto",height:"100%"}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",marginBottom:32}}>
+        <div>
+          <Label color={T.blue}>β₀ — level</Label>
+          <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{b0.toFixed(2)}%</div>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>long-run yield as τ→∞</div>
+        </div>
+        <KpiBlock label="β₁ — slope"     value={`${b1.toFixed(2)}%`} sub={`β₀+β₁ = ${(b0+b1).toFixed(2)}% (short rate)`}/>
+        <KpiBlock label="β₂ — curvature" value={`${b2.toFixed(2)}%`} sub="medium-term hump / belly"/>
+        <KpiBlock label="λ — decay"       value={lam.toFixed(2)}      sub={`RMSE = ${rmse.toFixed(2)}bp`}/>
       </div>
-      <div style={{ fontFamily: serif, fontSize: 32, color: T.text, marginBottom: 8 }}>Nelson-Siegel</div>
-      <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, marginBottom: 32, lineHeight: 1.8 }}>
-        Parametric curve fitting via scipy.optimize · Python implementation in progress
-      </div>
-      <Divider />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 28 }}>
-        {[
-          { label: "β₀ — level",      desc: "Long-run yield as τ→∞. The market's long-run rate expectation." },
-          { label: "β₁ — slope",      desc: "Short-end component. β₀ + β₁ gives the instantaneous short rate." },
-          { label: "β₂ — curvature",  desc: "Medium-term hump or trough. Controls the belly of the curve." },
-          { label: "λ — decay factor", desc: "Where the hump peaks. Free parameter — optimised alongside β coefficients." },
-        ].map(p => (
-          <div key={p.label} style={{ padding: "18px 20px", border: `1px solid ${T.border}` }}>
-            <div style={{ fontFamily: mono, fontSize: 9, color: T.muted, letterSpacing: "0.12em",
-              textTransform: "uppercase", marginBottom: 8 }}>{p.label}</div>
-            <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, lineHeight: 1.7 }}>{p.desc}</div>
+
+      <Divider/>
+
+      <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:48}}>
+        <div>
+          <Label>Nelson-Siegel fitted curve</Label>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
+            <span style={{color:T.blue}}>——</span>&ensp;NS fitted&emsp;
+            <span style={{color:T.cyan}}>◆</span>&ensp;Observed spot rates
           </div>
-        ))}
-      </div>
-      <div style={{ marginTop: 24, padding: "14px 18px", border: `1px solid ${T.border}`, background: T.surf }}>
-        <Label color={T.muted}>Formula</Label>
-        <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 2.2, marginTop: 4 }}>
-          y(τ) = β₀ + β₁·(1−e^(−τ/λ))/(τ/λ) + β₂·[(1−e^(−τ/λ))/(τ/λ) − e^(−τ/λ)]
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart margin={{top:4,right:8,bottom:4,left:8}}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="tenor" type="number" domain={[0,31]} stroke={T.border}
+                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickLine={false} axisLine={false} width={44} tickFormatter={v=>`${v.toFixed(1)}%`}/>
+              <Tooltip content={<ChartTip suffix="Y"/>} cursor={{stroke:T.border}}/>
+              <Line data={fittedCurve} type="monotone" dataKey="fitted"
+                stroke={T.blue} strokeWidth={2} dot={false} name="NS fitted"/>
+              <Line data={observed} type="monotone" dataKey="observed"
+                stroke={T.cyan} strokeWidth={0} dot={{fill:T.cyan,r:4,strokeWidth:0}} name="Observed"/>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div>
+          <Label>Adjust parameters</Label>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
+            drag to explore · OLS auto-fits on load
+          </div>
+          {[
+            {key:"b0", label:"β₀ — level",     min:1,   max:10,  step:0.05},
+            {key:"b1", label:"β₁ — slope",     min:-5,  max:5,   step:0.05},
+            {key:"b2", label:"β₂ — curvature", min:-5,  max:5,   step:0.05},
+            {key:"lam",label:"λ — decay",       min:0.3, max:10,  step:0.1 },
+          ].map(({key,label,min,max,step})=>(
+            <div key={key} style={{marginBottom:20}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                <Label>{label}</Label>
+                <span style={{fontFamily:mono,fontSize:11,color:T.blue}}>
+                  {manual[key].toFixed(2)}{key==="lam"?"Y":"%"}
+                </span>
+              </div>
+              <input type="range" min={min} max={max} step={step} value={manual[key]}
+                onChange={e=>setManual(p=>({...p,[key]:parseFloat(e.target.value)}))}
+                style={{width:"100%",accentColor:T.blue,cursor:"pointer"}}/>
+            </div>
+          ))}
+          <button onClick={()=>setManual(params)}
+            style={{width:"100%",padding:"8px 0",background:T.blueLo,border:`1px solid ${T.border2}`,
+              color:T.blue,fontFamily:mono,fontSize:9,letterSpacing:"0.14em",
+              textTransform:"uppercase",cursor:"pointer",marginBottom:16}}>
+            reset to fitted
+          </button>
+          <div style={{padding:"12px 14px",background:T.blueLo,border:`1px solid ${T.border2}`}}>
+            <Label color={T.blue}>NS formula</Label>
+            <div style={{fontFamily:mono,fontSize:9,color:T.muted,lineHeight:2.0}}>
+              y(τ) = β₀<br/>
+              &emsp;+ β₁·(1−e^(−τ/λ))/(τ/λ)<br/>
+              &emsp;+ β₂·[(1−e^(−τ/λ))/(τ/λ) − e^(−τ/λ)]
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -276,37 +474,119 @@ function NelsonSiegelTab() {
 }
 
 /* ─── PCA TAB ─────────────────────────────────────────────────────────────── */
-function PCATab() {
+function PCATab({curveData}){
+  const [activePC, setActivePC] = useState(0);
+  const [pcs,      setPcs]      = useState(null);
+
+  useEffect(()=>{
+    if (!curveData.length) return;
+    const parYields = curveData.map(r=>[r.tenor,r.par]);
+    const matrix    = buildHistoricalMatrix(parYields);
+    const result    = runPCA(matrix, curveData.length);
+    setPcs(result);
+  },[curveData]);
+
+  if (!pcs) return (
+    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.muted}}>
+      <div className="spinner"/> &ensp;Computing PCA eigendecomposition…
+    </div>
+  );
+
+  const PC_META = [
+    {label:"PC1 — Level",     color:T.blue,  desc:"All maturities shift together. Parallel shift. Fed hike/cut cycles."},
+    {label:"PC2 — Slope",     color:T.cyan,  desc:"Short and long ends diverge. Steepener/flattener. 2s10s spread trade."},
+    {label:"PC3 — Curvature", color:T.amber, desc:"Belly vs wings. Butterfly: long 5Y, short 2Y and 10Y."},
+  ];
+
+  const pc       = pcs[activePC];
+  const pcMeta   = PC_META[activePC];
+  const totalVar = pcs.reduce((s,p)=>s+p.variancePct,0);
+  const loadingData = curveData.map((r,i)=>({tenor:`${r.tenor}Y`, loading:pc.loading[i]??0}));
+
   return (
-    <div className="fade-3" style={{ padding: "32px 44px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-        <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.amber }} />
-        <span style={{ fontFamily: mono, fontSize: 9, color: T.amber, letterSpacing: "0.16em", textTransform: "uppercase" }}>In Progress</span>
-      </div>
-      <div style={{ fontFamily: serif, fontSize: 32, color: T.text, marginBottom: 8 }}>PCA Decomposition</div>
-      <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, marginBottom: 32, lineHeight: 1.8 }}>
-        Eigendecomposition of historical yield curve changes · FRED data · Python implementation in progress
-      </div>
-      <Divider />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginTop: 28 }}>
-        {[
-          { label: "PC1 — Level",     pct: "~85% variance", desc: "All maturities shift together. The dominant factor — driven by Fed hike/cut cycles." },
-          { label: "PC2 — Slope",     pct: "~10% variance", desc: "Short and long ends move in opposite directions. Steepener / flattener trades." },
-          { label: "PC3 — Curvature", pct: "~3% variance",  desc: "Belly moves relative to wings. Butterfly trade: long 5Y, short 2Y and 10Y." },
-        ].map(p => (
-          <div key={p.label} style={{ padding: "18px 20px", border: `1px solid ${T.border}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <div style={{ fontFamily: mono, fontSize: 9, color: T.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>{p.label}</div>
-              <div style={{ fontFamily: mono, fontSize: 9, color: T.muted }}>{p.pct}</div>
-            </div>
-            <div style={{ fontFamily: mono, fontSize: 11, color: T.muted, lineHeight: 1.7 }}>{p.desc}</div>
-          </div>
+    <div className="fade-3" style={{padding:"32px 44px",overflowY:"auto",height:"100%"}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",marginBottom:32}}>
+        <div>
+          <Label color={T.blue}>Variance explained</Label>
+          <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{totalVar.toFixed(1)}%</div>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>first 3 components</div>
+        </div>
+        {pcs.map((p,k)=>(
+          <KpiBlock key={k} label={PC_META[k].label} value={`${p.variancePct.toFixed(1)}%`}/>
         ))}
       </div>
-      <div style={{ marginTop: 24, padding: "14px 18px", border: `1px solid ${T.border}`, background: T.surf }}>
-        <Label color={T.muted}>Eigendecomposition</Label>
-        <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 2.2, marginTop: 4 }}>
-          Σ = V · Λ · Vᵀ &ensp;·&ensp; Σ = cov(Δyields) across maturities &ensp;·&ensp; columns of V = loading vectors
+
+      <Divider/>
+
+      <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:48}}>
+        <div>
+          <Label>Principal component loadings</Label>
+          <div style={{display:"flex",gap:8,margin:"12px 0 18px"}}>
+            {PC_META.map((m,k)=>(
+              <button key={k} className="tab-btn" onClick={()=>setActivePC(k)}
+                style={{padding:"6px 14px",background:activePC===k?m.color+"22":"transparent",
+                  border:`1px solid ${activePC===k?m.color:T.border}`,
+                  color:activePC===k?m.color:T.muted,
+                  fontFamily:mono,fontSize:9,letterSpacing:"0.12em",
+                  textTransform:"uppercase",cursor:"pointer",transition:"all 0.12s"}}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={loadingData} margin={{top:4,right:4,bottom:4,left:0}} barSize={22}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="tenor" stroke={T.border}
+                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickLine={false} axisLine={{stroke:T.border}}/>
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickLine={false} axisLine={false} width={48} tickFormatter={v=>v.toFixed(2)}/>
+              <Tooltip content={({active,payload,label})=>active&&payload?.length?(
+                <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"8px 12px",fontFamily:mono,fontSize:11}}>
+                  <div style={{color:pcMeta.color,marginBottom:4}}>{label}</div>
+                  <div style={{color:T.text}}>Loading: {payload[0]?.value?.toFixed(4)}</div>
+                </div>
+              ):null} cursor={{fill:"rgba(42,143,212,0.04)"}}/>
+              <ReferenceLine y={0} stroke={T.border2}/>
+              <Bar dataKey="loading" radius={[2,2,0,0]}>
+                {loadingData.map((d,i)=>(
+                  <Cell key={i} fill={d.loading>=0?pcMeta.color:pcMeta.color+"55"}/>
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div>
+          <Label>Factor interpretation</Label>
+          <div style={{marginTop:14}}>
+            {PC_META.map((m,k)=>(
+              <div key={k} onClick={()=>setActivePC(k)}
+                style={{padding:"14px",marginBottom:10,
+                  border:`1px solid ${activePC===k?m.color:T.border}`,
+                  background:activePC===k?m.color+"0A":"transparent",
+                  cursor:"pointer",transition:"all 0.12s"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                  <span style={{fontFamily:mono,fontSize:10,
+                    color:activePC===k?m.color:T.muted,
+                    letterSpacing:"0.1em",textTransform:"uppercase"}}>{m.label}</span>
+                  <span style={{fontFamily:mono,fontSize:10,color:m.color}}>
+                    {pcs[k].variancePct.toFixed(1)}%
+                  </span>
+                </div>
+                <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.7}}>{m.desc}</div>
+              </div>
+            ))}
+            <div style={{padding:"12px 14px",background:T.blueLo,border:`1px solid ${T.border2}`}}>
+              <Label color={T.blue}>Eigendecomposition</Label>
+              <div style={{fontFamily:mono,fontSize:9,color:T.muted,lineHeight:2.0}}>
+                Σ = V · Λ · Vᵀ<br/>
+                Σ = cov(Δyields) across maturities<br/>
+                Columns of V = loading vectors<br/>
+                Λ = diag(eigenvalues) = variance
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -314,103 +594,87 @@ function PCATab() {
 }
 
 /* ─── VASICEK TAB ─────────────────────────────────────────────────────────── */
-function VasicekTab() {
-  const [kappa,  setKappa]  = useState(0.30);
-  const [theta,  setTheta]  = useState(5.00);
-  const [sigma,  setSigma]  = useState(1.80);
-  const [r0,     setR0]     = useState(3.00);
+function VasicekTab(){
+  const [kappa,setKappa]=useState(0.30);
+  const [theta,setTheta]=useState(5.00);
+  const [sigma,setSigma]=useState(1.80);
+  const [r0,setR0]=useState(3.00);
 
-  const paths = genPaths(8, kappa, theta / 100, sigma / 100, r0 / 100);
-  const feller = 2 * kappa * (theta / 100) > Math.pow(sigma / 100, 2);
-  const ert    = theta + (r0 - theta) * Math.exp(-kappa);
+  const paths  = genPaths(8,kappa,theta/100,sigma/100,r0/100);
+  const feller = 2*kappa*(theta/100)>Math.pow(sigma/100,2);
+  const ert    = theta+(r0-theta)*Math.exp(-kappa);
 
   return (
-    <div className="fade-3" style={{ padding: "32px 44px", overflowY: "auto", height: "100%" }}>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", marginBottom: 32 }}>
+    <div className="fade-3" style={{padding:"32px 44px",overflowY:"auto",height:"100%"}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",marginBottom:32}}>
         <div>
           <Label color={T.blue}>Long-run mean θ</Label>
-          <div style={{ fontFamily: serif, fontSize: 44, color: T.blue, lineHeight: 1 }}>{theta.toFixed(2)}%</div>
-          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, marginTop: 6 }}>
-            E[r<sub>∞</sub>] = θ · rates revert here
-          </div>
+          <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{theta.toFixed(2)}%</div>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>E[r<sub>∞</sub>] = θ · rates revert here</div>
         </div>
-        <KpiBlock label="r₀ — today"      value={`${r0.toFixed(2)}%`}  sub="current short rate" />
-        <KpiBlock label="E[r] at 1Y"      value={`${ert.toFixed(3)}%`} sub="θ + (r₀−θ)·e^(−κ)" />
-        <KpiBlock label="Feller condition" value={feller ? "✓ holds" : "✗ fails"}
-          sub={feller ? "positive rates guaranteed (CIR)" : "negative rates possible"} />
+        <KpiBlock label="r₀ — today"      value={`${r0.toFixed(2)}%`}  sub="current short rate"/>
+        <KpiBlock label="E[r] at 1Y"      value={`${ert.toFixed(3)}%`} sub="θ + (r₀−θ)·e^(−κ)"/>
+        <KpiBlock label="Feller condition" value={feller?"✓ holds":"✗ fails"}
+          sub={feller?"positive rates guaranteed (CIR)":"negative rates possible"}/>
       </div>
-
-      <Divider />
-
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr", gap: 48 }}>
-
-        {/* Path chart */}
+      <Divider/>
+      <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:48}}>
         <div>
           <Label>Monte Carlo short rate paths</Label>
-          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 18px" }}>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
             dr = κ(θ−r)dt + σdW · 8 sample paths · mean reversion to&ensp;
-            <span style={{ color: T.blue }}>θ = {theta.toFixed(2)}%</span>
+            <span style={{color:T.blue}}>θ = {theta.toFixed(2)}%</span>
           </div>
           <ResponsiveContainer width="100%" height={280}>
-            <LineChart margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
-              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="t" type="number" domain={[0, 5]} stroke={T.border}
-                tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
-                tickFormatter={v => `${v}Y`} tickLine={false} axisLine={{ stroke: T.border }} />
-              <YAxis stroke={T.border} tick={{ fill: T.muted, fontSize: 9, fontFamily: mono }}
-                tickLine={false} axisLine={false} width={44} tickFormatter={v => `${v.toFixed(1)}%`} />
-              <ReferenceLine y={theta} stroke={T.blue} strokeDasharray="4 3" strokeOpacity={0.5} />
-              <Tooltip content={({ active, payload, label }) => active && payload?.length ? (
-                <div style={{ background: T.surf, border: `1px solid ${T.border2}`, padding: "8px 12px", fontFamily: mono, fontSize: 11 }}>
-                  <div style={{ color: T.blue, marginBottom: 4 }}>t = {parseFloat(label).toFixed(2)}Y</div>
-                  {payload.slice(0, 4).map((p, i) => (
-                    <div key={i} style={{ color: p.color }}>{p.value?.toFixed(3)}%</div>
-                  ))}
+            <LineChart margin={{top:4,right:8,bottom:4,left:8}}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="t" type="number" domain={[0,5]} stroke={T.border}
+                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tickLine={false} axisLine={false} width={44} tickFormatter={v=>`${v.toFixed(1)}%`}/>
+              <ReferenceLine y={theta} stroke={T.blue} strokeDasharray="4 3" strokeOpacity={0.5}/>
+              <Tooltip content={({active,payload,label})=>active&&payload?.length?(
+                <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"8px 12px",fontFamily:mono,fontSize:11}}>
+                  <div style={{color:T.blue,marginBottom:4}}>t = {parseFloat(label).toFixed(2)}Y</div>
+                  {payload.slice(0,4).map((p,i)=><div key={i} style={{color:p.color}}>{p.value?.toFixed(3)}%</div>)}
                 </div>
-              ) : null} cursor={{ stroke: T.border }} />
-              {paths.map((path, i) => (
+              ):null} cursor={{stroke:T.border}}/>
+              {paths.map((path,i)=>(
                 <Line key={i} data={path} dataKey="r" type="monotone"
-                  stroke={PATH_COLORS[i]} strokeWidth={1} dot={false}
-                  strokeOpacity={0.65} name={`Path ${i + 1}`} />
+                  stroke={PATH_COLORS[i]} strokeWidth={1} dot={false} strokeOpacity={0.65} name={`Path ${i+1}`}/>
               ))}
             </LineChart>
           </ResponsiveContainer>
         </div>
-
-        {/* Parameter controls */}
         <div>
           <Label>Model parameters</Label>
-          <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, margin: "6px 0 18px" }}>
-            adjust to recalibrate paths in real time
-          </div>
-
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>adjust to recalibrate in real time</div>
           {[
-            { label: "κ — mean reversion speed", value: kappa,  set: setKappa,  min: 0.01, max: 2.0,  step: 0.01, fmt: v => v.toFixed(2) },
-            { label: "θ — long-run mean (%)",    value: theta,  set: setTheta,  min: 0.5,  max: 10.0, step: 0.1,  fmt: v => v.toFixed(2) + "%" },
-            { label: "σ — volatility (%)",       value: sigma,  set: setSigma,  min: 0.1,  max: 5.0,  step: 0.05, fmt: v => v.toFixed(2) + "%" },
-            { label: "r₀ — initial rate (%)",    value: r0,     set: setR0,     min: 0.1,  max: 10.0, step: 0.1,  fmt: v => v.toFixed(2) + "%" },
-          ].map(({ label, value, set, min, max, step, fmt }) => (
-            <div key={label} style={{ marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            {label:"κ — mean reversion speed",value:kappa,set:setKappa,min:0.01,max:2.0, step:0.01,fmt:v=>v.toFixed(2)},
+            {label:"θ — long-run mean (%)",   value:theta,set:setTheta,min:0.5, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
+            {label:"σ — volatility (%)",      value:sigma,set:setSigma,min:0.1, max:5.0, step:0.05,fmt:v=>v.toFixed(2)+"%"},
+            {label:"r₀ — initial rate (%)",   value:r0,   set:setR0,   min:0.1, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
+          ].map(({label,value,set,min,max,step,fmt})=>(
+            <div key={label} style={{marginBottom:20}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
                 <Label>{label}</Label>
-                <span style={{ fontFamily: mono, fontSize: 11, color: T.blue }}>{fmt(value)}</span>
+                <span style={{fontFamily:mono,fontSize:11,color:T.blue}}>{fmt(value)}</span>
               </div>
               <input type="range" min={min} max={max} step={step} value={value}
-                onChange={e => set(parseFloat(e.target.value))}
-                style={{ width: "100%", accentColor: T.blue, cursor: "pointer" }} />
+                onChange={e=>set(parseFloat(e.target.value))}
+                style={{width:"100%",accentColor:T.blue,cursor:"pointer"}}/>
             </div>
           ))}
-
-          <div style={{ padding: "12px 14px", background: feller ? T.blueLo : T.amberLo,
-            border: `1px solid ${feller ? T.border2 : T.amber}`, marginTop: 4, transition: "all 0.2s" }}>
-            <Label color={feller ? T.blue : T.amber}>
-              {feller ? "Feller condition satisfied" : "Feller condition violated"}
+          <div style={{padding:"12px 14px",background:feller?T.blueLo:T.amberLo,
+            border:`1px solid ${feller?T.border2:T.amber}`,marginTop:4,transition:"all 0.2s"}}>
+            <Label color={feller?T.blue:T.amber}>
+              {feller?"Feller condition satisfied":"Feller condition violated"}
             </Label>
-            <div style={{ fontFamily: mono, fontSize: 10, color: T.muted, lineHeight: 1.8 }}>
-              2κθ = {(2 * kappa * theta / 100).toFixed(4)}<br />
-              σ² = {Math.pow(sigma / 100, 2).toFixed(6)}<br />
-              {feller ? "CIR: positive rates guaranteed" : "Vasicek: negative rates possible"}
+            <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.8}}>
+              2κθ = {(2*kappa*theta/100).toFixed(4)}<br/>
+              σ² = {Math.pow(sigma/100,2).toFixed(6)}<br/>
+              {feller?"CIR: positive rates guaranteed":"Vasicek: negative rates possible"}
             </div>
           </div>
         </div>
@@ -420,86 +684,119 @@ function VasicekTab() {
 }
 
 /* ─── MAIN ────────────────────────────────────────────────────────────────── */
-export default function App() {
-  const [tab, setTab] = useState("bootstrap");
+export default function App(){
+  const [tab,       setTab]       = useState("bootstrap");
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState(null);
+  const [curveData, setCurveData] = useState([]);
+  const [fetchDate, setFetchDate] = useState("—");
 
-  const TABS = [
-    { id: "bootstrap", l: "Bootstrapper",  done: true  },
-    { id: "ns",        l: "Nelson-Siegel", done: false },
-    { id: "pca",       l: "PCA",           done: false },
-    { id: "vasicek",   l: "Vasicek / CIR", done: true  },
+  const FALLBACK = [
+    {tenor:0.5,par:5.30,spot:5.32,fwd:5.32},{tenor:1,par:5.10,spot:5.14,fwd:4.96},
+    {tenor:2,par:4.80,spot:4.86,fwd:4.58},{tenor:3,par:4.65,spot:4.72,fwd:4.46},
+    {tenor:5,par:4.50,spot:4.59,fwd:4.47},{tenor:7,par:4.55,spot:4.65,fwd:4.86},
+    {tenor:10,par:4.60,spot:4.72,fwd:4.98},{tenor:20,par:4.80,spot:4.96,fwd:5.42},
+    {tenor:30,par:4.90,spot:5.08,fwd:5.64},
   ];
 
-  const spread = SPOT_RATES.find(s => s.tenor === 10).spot - SPOT_RATES.find(s => s.tenor === 2).spot;
+  useEffect(()=>{
+    fetchTreasuryYields()
+      .then(({date,yields})=>{
+        const parYields = Object.entries(yields)
+          .map(([t,y])=>[parseFloat(t),y])
+          .filter(([t])=>t>=0.5)
+          .sort((a,b)=>a[0]-b[0]);
+        const spots = bootstrapSpots(parYields);
+        const fwds  = spotsToForwards(spots);
+        setCurveData(parYields.map(([tenor,par])=>({
+          tenor, par, spot:spots[tenor]??par, fwd:fwds[tenor]??par,
+        })));
+        setFetchDate(date);
+        setLoading(false);
+      })
+      .catch(err=>{
+        setError(err.message);
+        setCurveData(FALLBACK);
+        setFetchDate("fallback");
+        setLoading(false);
+      });
+  },[]);
+
+  const TABS = [
+    {id:"bootstrap",l:"Bootstrapper"},
+    {id:"ns",       l:"Nelson-Siegel"},
+    {id:"pca",      l:"PCA"},
+    {id:"vasicek",  l:"Vasicek / CIR"},
+  ];
+
+  const r2  = curveData.find(r=>r.tenor===2)?.spot  ?? 0;
+  const r10 = curveData.find(r=>r.tenor===10)?.spot ?? 0;
+  const r30 = curveData.find(r=>r.tenor===30)?.spot ?? 0;
+  const r5  = curveData.find(r=>r.tenor===5)?.spot  ?? 0;
+  const spread = r10-r2;
+  const isLive = !error && !loading;
 
   return (
-    <div style={{ background: T.bg, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div style={{background:T.bg,minHeight:"100vh",display:"flex",flexDirection:"column"}}>
       <style>{css}</style>
 
       {/* ── HEADER ── */}
-      <div className="fade-1" style={{ borderBottom: `1px solid ${T.border}`, padding: "0 40px",
-        height: 48, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ width: 2, height: 18, background: T.blue }} />
-          <span style={{ fontFamily: serif, fontSize: 15, color: T.text }}>Yield Curve Suite</span>
-          <div style={{ width: 1, height: 14, background: T.border }} />
-          <span style={{ fontFamily: mono, fontSize: 9, letterSpacing: "0.18em",
-            textTransform: "uppercase", color: T.muted }}>Project 2 · Fixed Income</span>
+      <div className="fade-1" style={{borderBottom:`1px solid ${T.border}`,padding:"0 40px",
+        height:48,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:16}}>
+          <div style={{width:2,height:18,background:T.blue}}/>
+          <span style={{fontFamily:serif,fontSize:15,color:T.text}}>Yield Curve Suite</span>
+          <div style={{width:1,height:14,background:T.border}}/>
+          <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.18em",textTransform:"uppercase",color:T.muted}}>Project 2 · Fixed Income</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-          <span style={{ fontFamily: mono, fontSize: 9, color: T.muted }}>
-            {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "2-digit", year: "numeric" }).toUpperCase()}
+        <div style={{display:"flex",alignItems:"center",gap:20}}>
+          <span style={{fontFamily:mono,fontSize:9,color:isLive?T.green:error?T.amber:T.muted}}>
+            {loading?"fetching...":isLive?`● live · ${fetchDate}`:`⚠ fallback`}
           </span>
-          <div style={{ width: 1, height: 12, background: T.border }} />
-          <span style={{ fontFamily: mono, fontSize: 9, color: T.muted }}>github.com/aharode/yield-curve</span>
+          <div style={{width:1,height:12,background:T.border}}/>
+          <span style={{fontFamily:mono,fontSize:9,color:T.muted}}>github.com/aharode/yield-curve</span>
         </div>
       </div>
 
       {/* ── STATUS BAR ── */}
-      <div className="fade-2" style={{ borderBottom: `1px solid ${T.border}`, padding: "0 40px",
-        height: 30, display: "flex", alignItems: "center", background: T.surf, flexShrink: 0 }}>
+      <div className="fade-2" style={{borderBottom:`1px solid ${T.border}`,padding:"0 40px",
+        height:30,display:"flex",alignItems:"center",background:T.surf,flexShrink:0}}>
         {[
-          ["2Y",    `${SPOT_RATES.find(s=>s.tenor===2).spot.toFixed(2)}%`],
-          ["5Y",    `${SPOT_RATES.find(s=>s.tenor===5).spot.toFixed(2)}%`],
-          ["10Y",   `${SPOT_RATES.find(s=>s.tenor===10).spot.toFixed(2)}%`],
-          ["30Y",   `${SPOT_RATES.find(s=>s.tenor===30).spot.toFixed(2)}%`],
-          ["2s10s", `${spread >= 0 ? "+" : ""}${(spread * 100).toFixed(0)}bp`],
-          ["Source","US Treasury · bootstrapped"],
-        ].map(([k, v], i) => (
-          <div key={k} style={{ display: "flex", alignItems: "center" }}>
-            {i > 0 && <div style={{ width: 1, height: 12, background: T.border, margin: "0 14px" }} />}
-            <span style={{ fontFamily: mono, fontSize: 9, color: T.muted, marginRight: 6,
-              letterSpacing: "0.1em", textTransform: "uppercase" }}>{k}</span>
-            <span style={{ fontFamily: mono, fontSize: 10, color: T.blue, fontWeight: 500 }}>{v}</span>
+          ["2Y",    r2  ?`${r2.toFixed(2)}%`:"—"],
+          ["5Y",    r5  ?`${r5.toFixed(2)}%`:"—"],
+          ["10Y",   r10 ?`${r10.toFixed(2)}%`:"—"],
+          ["30Y",   r30 ?`${r30.toFixed(2)}%`:"—"],
+          ["2s10s", r10 ?`${spread>=0?"+":""}${(spread*100).toFixed(0)}bp`:"—"],
+          ["Source",isLive?"US Treasury · live":"stub data"],
+        ].map(([k,v],i)=>(
+          <div key={k} style={{display:"flex",alignItems:"center"}}>
+            {i>0&&<div style={{width:1,height:12,background:T.border,margin:"0 14px"}}/>}
+            <span style={{fontFamily:mono,fontSize:9,color:T.muted,marginRight:6,letterSpacing:"0.1em",textTransform:"uppercase"}}>{k}</span>
+            <span style={{fontFamily:mono,fontSize:10,color:k==="Source"&&isLive?T.green:T.blue,fontWeight:500}}>{v}</span>
           </div>
         ))}
       </div>
 
       {/* ── TAB BAR ── */}
-      <div className="fade-2" style={{ borderBottom: `1px solid ${T.border}`, display: "flex",
-        paddingLeft: 40, flexShrink: 0 }}>
-        {TABS.map(({ id, l, done }) => (
-          <button key={id} className="tab-btn" onClick={() => setTab(id)} style={{
-            padding: "13px 0", marginRight: 28, marginBottom: -1,
-            background: "transparent", border: "none",
-            borderBottom: `1px solid ${tab === id ? (done ? T.blue : T.amber) : "transparent"}`,
-            color: tab === id ? (done ? T.blue : T.amber) : T.muted,
-            fontFamily: mono, fontSize: 9, letterSpacing: "0.16em",
-            textTransform: "uppercase", cursor: "pointer",
-            display: "flex", alignItems: "center", gap: 7,
-          }}>
-            {!done && <span style={{ width: 4, height: 4, borderRadius: "50%", background: T.amber, flexShrink: 0, marginBottom: 1 }} />}
-            {l}
-          </button>
+      <div className="fade-2" style={{borderBottom:`1px solid ${T.border}`,display:"flex",paddingLeft:40,flexShrink:0}}>
+        {TABS.map(({id,l})=>(
+          <button key={id} className="tab-btn" onClick={()=>setTab(id)} style={{
+            padding:"13px 0",marginRight:28,marginBottom:-1,
+            background:"transparent",border:"none",
+            borderBottom:`1px solid ${tab===id?T.blue:"transparent"}`,
+            color:tab===id?T.blue:T.muted,
+            fontFamily:mono,fontSize:9,letterSpacing:"0.16em",
+            textTransform:"uppercase",cursor:"pointer",
+          }}>{l}</button>
         ))}
       </div>
 
       {/* ── CONTENT ── */}
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-        {tab === "bootstrap" && <BootstrapTab />}
-        {tab === "ns"        && <NelsonSiegelTab />}
-        {tab === "pca"       && <PCATab />}
-        {tab === "vasicek"   && <VasicekTab />}
+      <div style={{flex:1,overflowY:"auto",minHeight:0}}>
+        {tab==="bootstrap"&&<BootstrapTab curveData={curveData} loading={loading} error={error} date={fetchDate}/>}
+        {tab==="ns"       &&<NelsonSiegelTab curveData={curveData}/>}
+        {tab==="pca"      &&<PCATab curveData={curveData}/>}
+        {tab==="vasicek"  &&<VasicekTab/>}
       </div>
     </div>
   );
