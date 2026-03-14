@@ -362,7 +362,7 @@ function BootstrapTab({curveData,loading,error,date}){
 }
 
 /* ─── NELSON-SIEGEL TAB ───────────────────────────────────────────────────── */
-function NelsonSiegelTab({curveData}){
+function NelsonSiegelTab({curveData, fetchDate}){
   const [params, setParams] = useState(null);
   const [manual, setManual] = useState(null);
 
@@ -411,7 +411,8 @@ function NelsonSiegelTab({curveData}){
           <Label>Nelson-Siegel fitted curve</Label>
           <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
             <span style={{color:T.blue}}>——</span>&ensp;NS fitted&emsp;
-            <span style={{color:T.cyan}}>◆</span>&ensp;Observed spot rates
+            <span style={{color:T.cyan}}>◆</span>&ensp;Observed spot rates&emsp;
+            {fetchDate && fetchDate !== "—" && <span>· as of {fetchDate}</span>}
           </div>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart margin={{top:4,right:8,bottom:4,left:8}}>
@@ -594,15 +595,26 @@ function PCATab({curveData}){
 }
 
 /* ─── VASICEK TAB ─────────────────────────────────────────────────────────── */
-function VasicekTab(){
+function VasicekTab({curveData}){
+  // Default r₀ to today's 1Y spot rate if live data is available
+  const liveR0 = curveData.find(r=>r.tenor===1)?.spot
+               ?? curveData.find(r=>r.tenor===0.5)?.spot
+               ?? 3.00;
+
   const [kappa,setKappa]=useState(0.30);
   const [theta,setTheta]=useState(5.00);
   const [sigma,setSigma]=useState(1.80);
-  const [r0,setR0]=useState(3.00);
+  const [r0,setR0]=useState(null); // null = not yet initialised
 
-  const paths  = genPaths(8,kappa,theta/100,sigma/100,r0/100);
+  // Set r0 once live data arrives
+  useEffect(()=>{
+    if (r0===null && curveData.length) setR0(+liveR0.toFixed(2));
+  },[curveData]);
+
+  const effectiveR0 = r0 ?? liveR0;
+  const paths  = genPaths(8,kappa,theta/100,sigma/100,effectiveR0/100);
   const feller = 2*kappa*(theta/100)>Math.pow(sigma/100,2);
-  const ert    = theta+(r0-theta)*Math.exp(-kappa);
+  const ert    = theta+(effectiveR0-theta)*Math.exp(-kappa);
 
   return (
     <div className="fade-3" style={{padding:"32px 44px",overflowY:"auto",height:"100%"}}>
@@ -612,7 +624,7 @@ function VasicekTab(){
           <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{theta.toFixed(2)}%</div>
           <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>E[r<sub>∞</sub>] = θ · rates revert here</div>
         </div>
-        <KpiBlock label="r₀ — today"      value={`${r0.toFixed(2)}%`}  sub="current short rate"/>
+        <KpiBlock label="r₀ — today"      value={`${effectiveR0.toFixed(2)}%`}  sub="1Y Treasury spot rate"/>
         <KpiBlock label="E[r] at 1Y"      value={`${ert.toFixed(3)}%`} sub="θ + (r₀−θ)·e^(−κ)"/>
         <KpiBlock label="Feller condition" value={feller?"✓ holds":"✗ fails"}
           sub={feller?"positive rates guaranteed (CIR)":"negative rates possible"}/>
@@ -654,7 +666,7 @@ function VasicekTab(){
             {label:"κ — mean reversion speed",value:kappa,set:setKappa,min:0.01,max:2.0, step:0.01,fmt:v=>v.toFixed(2)},
             {label:"θ — long-run mean (%)",   value:theta,set:setTheta,min:0.5, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
             {label:"σ — volatility (%)",      value:sigma,set:setSigma,min:0.1, max:5.0, step:0.05,fmt:v=>v.toFixed(2)+"%"},
-            {label:"r₀ — initial rate (%)",   value:r0,   set:setR0,   min:0.1, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
+            {label:"r₀ — initial rate (%)",   value:effectiveR0,set:setR0,   min:0.1, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
           ].map(({label,value,set,min,max,step,fmt})=>(
             <div key={label} style={{marginBottom:20}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
@@ -747,14 +759,18 @@ export default function App(){
           <div style={{width:2,height:18,background:T.blue}}/>
           <span style={{fontFamily:serif,fontSize:15,color:T.text}}>Yield Curve Suite</span>
           <div style={{width:1,height:14,background:T.border}}/>
-          <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.18em",textTransform:"uppercase",color:T.muted}}>Project 2 · Fixed Income</span>
+          <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.18em",textTransform:"uppercase",color:T.muted}}>
+            Bootstrap · Nelson-Siegel · PCA · Vasicek
+          </span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:20}}>
           <span style={{fontFamily:mono,fontSize:9,color:isLive?T.green:error?T.amber:T.muted}}>
-            {loading?"fetching...":isLive?`● live · ${fetchDate}`:`⚠ fallback`}
+            {loading?"fetching...":isLive?`● live · ${fetchDate}`:`⚠ fallback · ${fetchDate}`}
           </span>
           <div style={{width:1,height:12,background:T.border}}/>
-          <span style={{fontFamily:mono,fontSize:9,color:T.muted}}>github.com/aharode/yield-curve</span>
+          <span style={{fontFamily:mono,fontSize:9,color:T.muted}}>
+            {new Date().toLocaleDateString("en-US",{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()}
+          </span>
         </div>
       </div>
 
@@ -767,12 +783,15 @@ export default function App(){
           ["10Y",   r10 ?`${r10.toFixed(2)}%`:"—"],
           ["30Y",   r30 ?`${r30.toFixed(2)}%`:"—"],
           ["2s10s", r10 ?`${spread>=0?"+":""}${(spread*100).toFixed(0)}bp`:"—"],
-          ["Source",isLive?"US Treasury · live":"stub data"],
+          ["As of", isLive ? fetchDate : "stub data"],
+          ["Source","US Treasury · bootstrapped"],
         ].map(([k,v],i)=>(
           <div key={k} style={{display:"flex",alignItems:"center"}}>
             {i>0&&<div style={{width:1,height:12,background:T.border,margin:"0 14px"}}/>}
             <span style={{fontFamily:mono,fontSize:9,color:T.muted,marginRight:6,letterSpacing:"0.1em",textTransform:"uppercase"}}>{k}</span>
-            <span style={{fontFamily:mono,fontSize:10,color:k==="Source"&&isLive?T.green:T.blue,fontWeight:500}}>{v}</span>
+            <span style={{fontFamily:mono,fontSize:10,
+              color:k==="Source"&&isLive?T.green:k==="As of"&&isLive?T.green:T.blue,
+              fontWeight:500}}>{v}</span>
           </div>
         ))}
       </div>
@@ -794,9 +813,9 @@ export default function App(){
       {/* ── CONTENT ── */}
       <div style={{flex:1,overflowY:"auto",minHeight:0}}>
         {tab==="bootstrap"&&<BootstrapTab curveData={curveData} loading={loading} error={error} date={fetchDate}/>}
-        {tab==="ns"       &&<NelsonSiegelTab curveData={curveData}/>}
+        {tab==="ns"       &&<NelsonSiegelTab curveData={curveData} fetchDate={fetchDate}/>}
         {tab==="pca"      &&<PCATab curveData={curveData}/>}
-        {tab==="vasicek"  &&<VasicekTab/>}
+        {tab==="vasicek"  &&<VasicekTab curveData={curveData}/>}
       </div>
     </div>
   );

@@ -6,8 +6,6 @@ A Python library and interactive dashboard for yield curve modeling and analysis
 
 [yield-curve.vercel.app](https://yield-curve.vercel.app)
 
-## Features
-
 **Bootstrapper** — fetches today's par yields from the US Treasury, recursively extracts zero-coupon spot rates using no-arbitrage conditions, and computes the implied forward curve. Charts par, spot, and forward curves side by side.
 
 **Nelson-Siegel** — auto-fits the Nelson & Siegel (1987) parametric model to the bootstrapped spot curve via OLS grid search on λ. Interactive sliders let you adjust β₀, β₁, β₂, and λ in real time and observe how each parameter shapes the curve.
