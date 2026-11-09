@@ -1,5 +1,5 @@
 """
-src/pca.py — Day 7
+src/pca.py
 
 PCA decomposition of yield curve moves.
 
@@ -8,12 +8,14 @@ Methodology:
     2. Build covariance matrix Σ of Δy across maturities
     3. Eigendecompose: Σ = V·Λ·Vᵀ
     4. Sort eigenvectors by descending eigenvalue
-    5. First 3 PCs explain ~99% of variance:
-         PC1 ≈ level  (all tenors same sign, ~85% variance)
-         PC2 ≈ slope  (short vs long diverge, ~10% variance)
-         PC3 ≈ curvature (belly vs wings, ~3% variance)
+    5. The first 3 PCs explain most of the variance:
+         PC1 ≈ level      (all tenors same sign)
+         PC2 ≈ slope      (short vs long end diverge)
+         PC3 ≈ curvature  (belly vs wings)
+       Shares depend on the sample and tenors; including T-bills lowers PC1's share,
+       because bill yields are anchored to the policy rate.
 
-Pure Python — no numpy. Uses Jacobi iteration for eigendecomposition.
+Uses Jacobi iteration for eigendecomposition.
 """
 
 import math
@@ -133,28 +135,29 @@ def loading_table(pca_result):
     return rows
 
 
-def factor_interpretation(pca_result):
+def factor_interpretation(pca_result, tol=0.02):
     """
-    Auto-label each PC as level / slope / curvature based on loading pattern.
-    """
-    loadings = pca_result["loadings"]
-    labels   = []
+    Label each PC as level / slope / curvature from the sign pattern of its loadings.
 
-    for k, loading in enumerate(loadings):
-        same_sign = all(v > 0 for v in loading) or all(v < 0 for v in loading)
-        if same_sign:
+    Counts sign changes across maturities, ignoring loadings smaller than `tol`
+    in absolute value (near-zero values flip sign on noise):
+        0 sign changes -> level      (all maturities move the same way)
+        1 sign change  -> slope      (short end vs long end)
+        2+             -> curvature  (belly vs wings)
+
+    Real-data loadings are rarely monotone (e.g. the slope factor often dips
+    through the bills before rising), so the sign pattern is the robust test.
+    """
+    labels = []
+    for loading in pca_result["loadings"]:
+        signs = [1 if v > 0 else -1 for v in loading if abs(v) >= tol]
+        changes = sum(1 for a, b in zip(signs, signs[1:]) if a != b)
+        if changes == 0:
             labels.append("Level — parallel shift of all maturities")
-            continue
-
-        # Check if monotone (slope)
-        diffs = [loading[i+1] - loading[i] for i in range(len(loading)-1)]
-        monotone = all(d >= 0 for d in diffs) or all(d <= 0 for d in diffs)
-        if monotone:
+        elif changes == 1:
             labels.append("Slope — short vs long end diverge (steepener/flattener)")
-            continue
-
-        labels.append("Curvature — belly vs wings (butterfly trade)")
-
+        else:
+            labels.append("Curvature — belly vs wings (butterfly trade)")
     return labels
 
 
@@ -209,6 +212,7 @@ def _jacobi_eigen(A, n, max_iter=1000, tol=1e-10):
     S = [row[:] for row in A]
     V = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
 
+    converged = False
     for _ in range(max_iter):
         # Find largest off-diagonal element
         p, q, max_val = 0, 1, 0.0
@@ -219,6 +223,7 @@ def _jacobi_eigen(A, n, max_iter=1000, tol=1e-10):
                     p, q = i, j
 
         if max_val < tol:
+            converged = True
             break
 
         # Compute rotation angle
@@ -251,6 +256,9 @@ def _jacobi_eigen(A, n, max_iter=1000, tol=1e-10):
             v_iq = V[i][q]
             V[i][p] =  c * v_ip + s * v_iq
             V[i][q] = -s * v_ip + c * v_iq
+
+    if not converged:
+        raise RuntimeError(f"Jacobi eigendecomposition did not converge in {max_iter} iterations")
 
     eigenvalues = [S[i][i] for i in range(n)]
     return eigenvalues, V

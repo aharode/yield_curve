@@ -10,7 +10,7 @@ A Python library and interactive dashboard for yield curve modeling and analysis
 
 **Nelson-Siegel** — auto-fits the Nelson & Siegel (1987) parametric model to the bootstrapped spot curve via OLS grid search on λ. Interactive sliders let you adjust β₀, β₁, β₂, and λ in real time and observe how each parameter shapes the curve.
 
-**PCA** — runs eigendecomposition of a historical daily yield change covariance matrix, extracting the first three principal components. PC1 (level), PC2 (slope), and PC3 (curvature) loading vectors are displayed as interactive bar charts with factor interpretations.
+**PCA** — eigendecomposition of the covariance matrix of daily changes in US Treasury par yields over the last two years (12 tenors, 1M to 30Y), extracting the first three principal components. PC1 (level), PC2 (slope), and PC3 (curvature) loading vectors are displayed as interactive bar charts with factor interpretations. The PCA is computed in Python by `data/build_pca.py` and served to the dashboard as `public/pca.json`.
 
 **Vasicek / CIR** — Monte Carlo simulation of the Vasicek (1977) and CIR (1985) short-rate models. Parameters κ, θ, σ, r₀ are adjustable in real time. Feller condition box turns amber when 2κθ < σ², indicating negative rates are possible.
 
@@ -42,6 +42,15 @@ python data/fetch.py
 # writes public/curve_data.json
 git add public/curve_data.json
 git commit -m "data: refresh Treasury yields"
+git push
+```
+
+To refresh the PCA with the latest two years of Treasury history:
+
+```bash
+python data/build_pca.py     # writes public/pca.json
+git add public/pca.json
+git commit -m "data: refresh PCA"
 git push
 ```
 

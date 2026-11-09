@@ -151,48 +151,11 @@ function fitNS(tenors, yields) {
   return best || {b0:4.5,b1:-0.3,b2:0.5,lam:2.5};
 }
 
-/* ─── PCA (JS port) ───────────────────────────────────────────────────────── */
-function buildHistoricalMatrix(parYields) {
-  const n = 252;
-  const base = parYields.map(([,y]) => y);
-  let level = 0;
-  return Array.from({length: n}, () => {
-    const lvl = (Math.random()-0.5)*0.04;
-    const slp = (Math.random()-0.5)*0.02;
-    level += (Math.random()-0.5)*0.01;
-    return parYields.map(([tenor],i) => {
-      const normT = (tenor-1)/29;
-      return base[i] + level + lvl + slp*(normT-0.5) + (Math.random()-0.5)*0.01;
-    });
-  });
-}
-
-function runPCA(matrix, m) {
-  const n   = matrix.length - 1;
-  const delta = matrix.slice(1).map((row,t) => row.map((v,j) => v - matrix[t][j]));
-  const means = Array.from({length:m}, (_,j) => delta.reduce((s,r)=>s+r[j],0)/n);
-  const dm    = delta.map(row => row.map((v,j) => v - means[j]));
-  const cov   = Array.from({length:m}, (_,i) => Array.from({length:m}, (_,j) =>
-    dm.reduce((s,r) => s+r[i]*r[j], 0)/(n-1)));
-
-  const pcs = [];
-  let defl = cov.map(r=>[...r]);
-  for (let k = 0; k < 3; k++) {
-    let v = Array.from({length:m}, (_,i) => i===k ? 1 : 0.1);
-    for (let iter = 0; iter < 200; iter++) {
-      v = defl.map(row => row.reduce((s,val,j)=>s+val*v[j],0));
-      const norm = Math.sqrt(v.reduce((s,x)=>s+x*x,0));
-      v = v.map(x=>x/norm);
-    }
-    const ev = v.reduce((s,vi,i)=>s+vi*defl[i].reduce((ss,val,j)=>ss+val*v[j],0),0);
-    if (k===0 && v.reduce((s,x)=>s+x,0)<0) v=v.map(x=>-x);
-    if (k===1 && v[0]>0) v=v.map(x=>-x);
-    pcs.push({loading: v.map(x=>+x.toFixed(4)), eigenval: Math.abs(ev)});
-    defl = defl.map((row,i)=>row.map((val,j)=>val-ev*v[i]*v[j]));
-  }
-  const total = pcs.reduce((s,p)=>s+p.eigenval,0)+1e-6;
-  return pcs.map(p=>({loading:p.loading, variancePct:+(p.eigenval/total*100).toFixed(1)}));
-}
+/* ─── PCA ─────────────────────────────────────────────────────────────────── */
+// Computed offline from real Treasury history by data/build_pca.py (src/pca.py)
+// and served as a static file, so the browser only displays the result.
+const PCA_URL = "/pca.json";
+const tenorLabel = t => t < 1 ? `${Math.round(t * 12)}M` : `${t}Y`;
 
 /* ─── VASICEK ─────────────────────────────────────────────────────────────── */
 function boxMuller() {
@@ -475,23 +438,30 @@ function NelsonSiegelTab({curveData, fetchDate}){
 }
 
 /* ─── PCA TAB ─────────────────────────────────────────────────────────────── */
-function PCATab({curveData}){
+function PCATab(){
   const [activePC, setActivePC] = useState(0);
-  const [pcs,      setPcs]      = useState(null);
+  const [pca,      setPca]      = useState(null);
+  const [error,    setError]    = useState(null);
 
   useEffect(()=>{
-    if (!curveData.length) return;
-    const parYields = curveData.map(r=>[r.tenor,r.par]);
-    const matrix    = buildHistoricalMatrix(parYields);
-    const result    = runPCA(matrix, curveData.length);
-    setPcs(result);
-  },[curveData]);
+    fetch(PCA_URL)
+      .then(r=>{ if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(setPca)
+      .catch(e=>setError(e.message));
+  },[]);
 
-  if (!pcs) return (
-    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.muted}}>
-      <div className="spinner"/> &ensp;Computing PCA eigendecomposition…
+  if (error) return (
+    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.amber}}>
+      ⚠ PCA data unavailable ({error}). Run <span style={{color:T.blue}}>python data/build_pca.py</span> and redeploy.
     </div>
   );
+  if (!pca) return (
+    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.muted}}>
+      <div className="spinner"/> &ensp;Loading PCA…
+    </div>
+  );
+
+  const pcs = pca.loadings.map((loading,k)=>({loading, variancePct:pca.variance_pct[k]}));
 
   const PC_META = [
     {label:"PC1 — Level",     color:T.blue,  desc:"All maturities shift together. Parallel shift. Fed hike/cut cycles."},
@@ -502,7 +472,7 @@ function PCATab({curveData}){
   const pc       = pcs[activePC];
   const pcMeta   = PC_META[activePC];
   const totalVar = pcs.reduce((s,p)=>s+p.variancePct,0);
-  const loadingData = curveData.map((r,i)=>({tenor:`${r.tenor}Y`, loading:pc.loading[i]??0}));
+  const loadingData = pca.tenors.map((t,i)=>({tenor:tenorLabel(t), loading:pc.loading[i]}));
 
   return (
     <div className="fade-3" style={{padding:"32px 44px",overflowY:"auto",height:"100%"}}>
@@ -511,6 +481,9 @@ function PCATab({curveData}){
           <Label color={T.blue}>Variance explained</Label>
           <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{totalVar.toFixed(1)}%</div>
           <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>first 3 components</div>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:4}}>
+            daily Δ par yields · {pca.start} → {pca.end} · {pca.n_obs} days
+          </div>
         </div>
         {pcs.map((p,k)=>(
           <KpiBlock key={k} label={PC_META[k].label} value={`${p.variancePct.toFixed(1)}%`}/>
@@ -814,7 +787,7 @@ export default function App(){
       <div style={{flex:1,overflowY:"auto",minHeight:0}}>
         {tab==="bootstrap"&&<BootstrapTab curveData={curveData} loading={loading} error={error} date={fetchDate}/>}
         {tab==="ns"       &&<NelsonSiegelTab curveData={curveData} fetchDate={fetchDate}/>}
-        {tab==="pca"      &&<PCATab curveData={curveData}/>}
+        {tab==="pca"      &&<PCATab/>}
         {tab==="vasicek"  &&<VasicekTab curveData={curveData}/>}
       </div>
     </div>

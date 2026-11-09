@@ -12,9 +12,11 @@ Usage:
     historical = fetch_fred_series(["DGS2", "DGS10"], years=5)
 """
 
+import urllib.error
 import urllib.request
 import urllib.parse
 import json
+import time
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 
@@ -42,6 +44,26 @@ TREASURY_FIELDS = {
 }
 
 
+# The Treasury site can stall requests that carry Python's default user agent,
+# so requests send a generic browser-style one and retry with backoff.
+HTTP_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/xml,text/xml,*/*"}
+
+
+def _http_get(url, timeout=30, retries=4):
+    """GET a URL as text, retrying on timeouts and connection errors."""
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=HTTP_HEADERS)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8")
+        except (TimeoutError, urllib.error.URLError) as e:
+            if attempt == retries - 1:
+                raise RuntimeError(f"Request failed after {retries} attempts: {url}") from e
+            wait = 2 ** attempt
+            print(f"  retrying in {wait}s ({type(e).__name__})")
+            time.sleep(wait)
+
+
 def fetch_treasury_yields(target_date=None):
     """
     Fetch par yields from the US Treasury XML feed.
@@ -62,8 +84,7 @@ def fetch_treasury_yields(target_date=None):
         ym = d.strftime("%Y%m")
         url = TREASURY_URL.format(ym=ym)
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                xml_data = resp.read().decode("utf-8")
+            xml_data = _http_get(url)
             result = _parse_treasury_xml(xml_data, target_date)
             if result:
                 return result
@@ -74,7 +95,12 @@ def fetch_treasury_yields(target_date=None):
     raise RuntimeError("Could not fetch Treasury yield data after 3 attempts.")
 
 
-def _parse_treasury_xml(xml_data, target_date):
+def _parse_treasury_entries(xml_data):
+    """Parse every daily entry in a Treasury XML month.
+
+    Returns a list of (date, {tenor: par_yield_pct}) sorted by date.
+    Returns None if the XML cannot be parsed.
+    """
     ns = {
         "atom": "http://www.w3.org/2005/Atom",
         "d":    "http://schemas.microsoft.com/ado/2007/08/dataservices",
@@ -85,34 +111,82 @@ def _parse_treasury_xml(xml_data, target_date):
     except ET.ParseError:
         return None
 
-    entries   = root.findall(".//atom:entry", ns)
-    best_entry, best_date = None, None
-
-    for entry in entries:
-        props   = entry.find(".//m:properties", ns)
+    rows = []
+    for entry in root.findall(".//atom:entry", ns):
+        props = entry.find(".//m:properties", ns)
         if props is None:
             continue
         date_el = props.find("d:NEW_DATE", ns)
         if date_el is None or not date_el.text:
             continue
-        entry_date = date.fromisoformat(date_el.text[:10])
-        if entry_date <= target_date:
-            if best_date is None or entry_date > best_date:
-                best_date, best_entry = entry_date, props
+        yields = {}
+        for field, tenor in TREASURY_FIELDS.items():
+            el = props.find(f"d:{field}", ns)
+            if el is not None and el.text:
+                try:
+                    yields[tenor] = float(el.text)
+                except ValueError:
+                    pass
+        if yields:
+            rows.append((date.fromisoformat(date_el.text[:10]), dict(sorted(yields.items()))))
+    return sorted(rows, key=lambda r: r[0])
 
-    if best_entry is None:
+
+def _parse_treasury_xml(xml_data, target_date):
+    """Latest entry on or before target_date, as {"date", "yields"}; None if none."""
+    rows = _parse_treasury_entries(xml_data)
+    if not rows:
         return None
+    eligible = [r for r in rows if r[0] <= target_date]
+    if not eligible:
+        return None
+    best_date, yields = eligible[-1]
+    return {"date": best_date.isoformat(), "yields": yields}
 
-    yields = {}
-    for field, tenor in TREASURY_FIELDS.items():
-        el = best_entry.find(f"d:{field}", ns)
-        if el is not None and el.text:
-            try:
-                yields[tenor] = float(el.text)
-            except ValueError:
-                pass
 
-    return {"date": best_date.isoformat(), "yields": dict(sorted(yields.items()))} if yields else None
+def fetch_treasury_history(years=2, end=None):
+    """
+    Daily par yields from the US Treasury XML feed over the last `years` years.
+    Makes one request per calendar month.
+
+    Only dates with a yield at every tenor in TREASURY_FIELDS are kept, so the
+    matrix has no gaps.
+
+    Returns:
+        {
+            "dates":   ["2024-11-11", ...],
+            "tenors":  [0.083, 0.167, ..., 30.0],
+            "matrix":  [[yield % per tenor], ...]     shape: (n_dates, n_tenors)
+            "dropped": number of dates skipped for missing tenors,
+        }
+    """
+    if end is None:
+        end = date.today()
+    elif isinstance(end, str):
+        end = date.fromisoformat(end)
+    start = end - timedelta(days=round(365.25 * years))
+
+    rows = {}
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        ym = f"{year}{month:02d}"
+        print(f"  {ym}", flush=True)
+        parsed = _parse_treasury_entries(_http_get(TREASURY_URL.format(ym=ym)))
+        if parsed is None:
+            raise RuntimeError(f"Could not parse Treasury XML for {ym}")
+        for d, yields in parsed:
+            if start <= d <= end:
+                rows[d] = yields
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+    tenors = sorted(TREASURY_FIELDS.values())
+    dates  = sorted(d for d, y in rows.items() if all(t in y for t in tenors))
+    return {
+        "dates":   [d.isoformat() for d in dates],
+        "tenors":  tenors,
+        "matrix":  [[rows[d][t] for t in tenors] for d in dates],
+        "dropped": len(rows) - len(dates),
+    }
 
 
 # ── FRED ──────────────────────────────────────────────────────────────────────
