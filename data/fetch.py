@@ -2,8 +2,8 @@
 data/fetch.py
 
 Two data sources:
-  1. US Treasury XML feed  — daily par yields for bootstrapping
-  2. FRED API              — historical yield data for PCA / backtesting
+  1. US Treasury XML feed  — daily par yields (latest day, or history for PCA)
+  2. FRED API              — optional historical series (needs a free API key)
 
 Usage:
     from data.fetch import fetch_treasury_yields, fetch_fred_series
@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 import urllib.parse
 import json
+import os
 import time
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
@@ -204,16 +205,22 @@ def fetch_fred_series(series_ids, years=5, api_key=None):
     """
     Fetch historical observations from FRED.
 
+    FRED's API requires a free key (https://fred.stlouisfed.org/docs/api/api_key.html).
+    Pass it as `api_key` or set the FRED_API_KEY environment variable.
+
     Returns:
         {series_id: [(date_str, value_float), ...]}
     """
+    api_key = api_key or os.environ.get("FRED_API_KEY")
+    if not api_key:
+        raise ValueError("FRED requires an API key: pass api_key or set FRED_API_KEY")
+
     start_date = (date.today() - timedelta(days=365 * years)).isoformat()
     results    = {}
 
     for sid in series_ids:
-        params = {"series_id": sid, "observation_start": start_date, "file_type": "json"}
-        if api_key:
-            params["api_key"] = api_key
+        params = {"series_id": sid, "observation_start": start_date,
+                  "file_type": "json", "api_key": api_key}
         url = FRED_BASE + "?" + urllib.parse.urlencode(params)
         try:
             with urllib.request.urlopen(url, timeout=10) as resp:

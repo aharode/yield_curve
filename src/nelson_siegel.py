@@ -1,5 +1,5 @@
 """
-src/nelson_siegel.py — Day 7
+src/nelson_siegel.py
 
 Nelson-Siegel (1987) parametric yield curve model.
 
@@ -15,8 +15,9 @@ Parameters:
     β₂ = curvature/hump    (controls belly shape)
     λ  = decay factor      (where hump peaks, typically 2-3 years)
 
-Estimation: minimise Σ (y_observed - y_NS)² over {β₀, β₁, β₂, λ}
-Uses scipy.optimize.minimize with Nelder-Mead (no gradient needed).
+Estimation: minimise Σ (y_observed - y_NS)² over {β₀, β₁, β₂, λ}.
+For a fixed λ the model is linear in the betas, so they are solved by OLS;
+λ is chosen by a log-spaced grid search (pure Python, no dependencies).
 """
 
 import math
@@ -107,7 +108,7 @@ def fit_ns(tenors, yields_pct, lam_init=2.0, lam_min=0.1, lam_max=10.0):
     best = None
     best_sse = float("inf")
 
-    # Grid search over lambda (30 points log-spaced from lam_min to lam_max)
+    # Grid search over lambda (40 points log-spaced from lam_min to lam_max)
     n_grid = 40
     lam_grid = [
         lam_min * (lam_max / lam_min) ** (i / (n_grid - 1))
@@ -241,7 +242,7 @@ def extrapolate(beta0, beta1, beta2, lam, max_tenor=50, step=0.25):
 
 
 if __name__ == "__main__":
-    # Fit to study guide Day 7 example curve
+    # Fit to an example curve
     tenors     = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
     yields_pct = [5.3,  5.2, 4.9, 4.6, 4.4,  4.5,  4.7]
 

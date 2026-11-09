@@ -33,26 +33,30 @@ const TENOR_MAP = {
   BC_7YEAR: 7, BC_10YEAR: 10, BC_20YEAR: 20, BC_30YEAR: 30,
 };
 
+// Latest daily curve. Early in a month the current month's feed can be empty,
+// so fall back to the previous months before giving up.
 async function fetchTreasuryYields() {
-  const now   = new Date();
-  const month = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const url   = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value_month=${month}`;
-  const res   = await fetch(url);
-  const text  = await res.text();
-  const parser = new DOMParser();
-  const doc    = parser.parseFromString(text, "application/xml");
-  const entries = doc.querySelectorAll("entry");
-  if (!entries.length) throw new Error("No entries in XML");
-  const entry   = entries[entries.length - 1];
-  const content = entry.querySelector("content") || entry;
-  const date    = content.querySelector("NEW_DATE")?.textContent?.slice(0, 10) || "unknown";
-  const yields  = {};
-  for (const [field, tenor] of Object.entries(TENOR_MAP)) {
-    const el  = content.querySelector(field);
-    const val = el ? parseFloat(el.textContent) : null;
-    if (val !== null && !isNaN(val)) yields[tenor] = val;
+  const now = new Date();
+  for (let back = 0; back < 3; back++) {
+    const d     = new Date(now.getFullYear(), now.getMonth() - back, 1);
+    const month = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const url   = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value_month=${month}`;
+    const res   = await fetch(url);
+    const doc   = new DOMParser().parseFromString(await res.text(), "application/xml");
+    const entries = doc.querySelectorAll("entry");
+    if (!entries.length) continue;
+    const entry   = entries[entries.length - 1];
+    const content = entry.querySelector("content") || entry;
+    const date    = content.querySelector("NEW_DATE")?.textContent?.slice(0, 10) || "unknown";
+    const yields  = {};
+    for (const [field, tenor] of Object.entries(TENOR_MAP)) {
+      const el  = content.querySelector(field);
+      const val = el ? parseFloat(el.textContent) : null;
+      if (val !== null && !isNaN(val)) yields[tenor] = val;
+    }
+    return { date, yields };
   }
-  return { date, yields };
+  throw new Error("No Treasury entries in the last 3 months");
 }
 
 /* ─── BOOTSTRAP (JS port of bootstrapper.py) ─────────────────────────────── */

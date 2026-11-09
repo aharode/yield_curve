@@ -1,5 +1,5 @@
 """
-src/vasicek.py — Day 6
+src/vasicek.py
 
 Vasicek (1977) and CIR (1985) short-rate models.
 

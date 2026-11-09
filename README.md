@@ -4,45 +4,40 @@ A Python library and interactive dashboard for yield curve modeling and analysis
 
 ## Live Demo
 
-[yield-curve.vercel.app](https://yield-curve.vercel.app)
+[yield-curve-ebon.vercel.app](https://yield-curve-ebon.vercel.app)
 
-**Bootstrapper** — fetches today's par yields from the US Treasury, recursively extracts zero-coupon spot rates using no-arbitrage conditions, and computes the implied forward curve. Charts par, spot, and forward curves side by side.
+**Bootstrapper** — fetches the latest par yields from the US Treasury, extracts zero-coupon spot rates so that every par bond reprices exactly at 100 (spot rates between quoted tenors are interpolated and solved numerically), and computes the implied forward curve. Charts par, spot, and forward curves side by side.
 
 **Nelson-Siegel** — auto-fits the Nelson & Siegel (1987) parametric model to the bootstrapped spot curve via OLS grid search on λ. Interactive sliders let you adjust β₀, β₁, β₂, and λ in real time and observe how each parameter shapes the curve.
 
 **PCA** — eigendecomposition of the covariance matrix of daily changes in US Treasury par yields over the last two years (12 tenors, 1M to 30Y), extracting the first three principal components. PC1 (level), PC2 (slope), and PC3 (curvature) loading vectors are displayed as interactive bar charts with factor interpretations. The PCA is computed in Python by `data/build_pca.py` and served to the dashboard as `public/pca.json`.
 
-**Vasicek / CIR** — Monte Carlo simulation of the Vasicek (1977) and CIR (1985) short-rate models. Parameters κ, θ, σ, r₀ are adjustable in real time. Feller condition box turns amber when 2κθ < σ², indicating negative rates are possible.
+**Vasicek / CIR** — Monte Carlo simulation of Vasicek (1977) short-rate paths, with r₀ set from the live 1Y spot rate. Parameters κ, θ, σ, r₀ are adjustable in real time. A Feller condition check shows whether the CIR (1985) model would keep rates strictly positive (2κθ > σ²). CIR pricing and simulation are in the Python library.
 
 ## Python Library
 
 ```
 src/
-  bootstrapper.py    # spot rate extraction, forward rates, interpolation
-  nelson_siegel.py   # NS fitting via OLS grid search on λ
-  pca.py             # Jacobi eigendecomposition, loading vectors, factor scores
-  vasicek.py         # Vasicek/CIR SDEs, Monte Carlo, Ito's Lemma, calibration
+  bootstrapper.py        # spot rate extraction, forward rates, interpolation
+  nelson_siegel.py       # NS fitting: OLS for the betas, grid search on λ
+  pca.py                 # Jacobi eigendecomposition, loading vectors, factor scores
+  vasicek.py             # Vasicek/CIR SDEs, Monte Carlo, Ito's Lemma, calibration
 data/
-  fetch.py           # US Treasury XML + FRED API fetchers (pure stdlib)
-problems/
-  day4_problems.py   # yield curve basics, forward rate derivations
-  day5_problems.py   # bootstrapping from par yields
-  day6_problems.py   # Vasicek Monte Carlo, Ito's Lemma, CIR vs Vasicek
-  day7_problems.py   # NS fitting, PCA decomposition, Week 1 synthesis
+  fetch.py               # US Treasury XML (latest day + history) and FRED fetchers (pure stdlib)
+  build_pca.py           # PCA of Treasury history -> public/pca.json for the dashboard
+examples/
+  curve_basics.py        # forward rates, live Treasury snapshot
+  bootstrapping.py       # par -> spot bootstrapping, pricing off the spot curve
+  vasicek_cir.py         # Vasicek Monte Carlo, Ito's Lemma, CIR vs Vasicek
+  nelson_siegel_pca.py   # NS fitting, PCA factors, full pipeline
 ```
 
 ## Live Data
 
-The UI fetches par yields directly from the US Treasury XML feed on page load and runs the bootstrap algorithm in the browser. If the Treasury server blocks the request (CORS), the app falls back to representative stub data and displays a warning.
-
-To refresh with guaranteed live data, run the Python fetcher locally and commit the output:
+The dashboard fetches the latest par yields directly from the US Treasury XML feed on page load and bootstraps them in the browser. If the request fails, it falls back to representative stub data and shows a warning. To check the latest curve from Python:
 
 ```bash
 python data/fetch.py
-# writes public/curve_data.json
-git add public/curve_data.json
-git commit -m "data: refresh Treasury yields"
-git push
 ```
 
 To refresh the PCA with the latest two years of Treasury history:
@@ -62,15 +57,15 @@ npm run dev      # http://localhost:5173
 npm run build    # production build
 ```
 
-Python library (no external dependencies):
+Python library (no external dependencies), run from the repository root:
 ```bash
-python problems/day4_problems.py
-python problems/day5_problems.py
-python problems/day6_problems.py
-python problems/day7_problems.py
+python examples/curve_basics.py
+python examples/bootstrapping.py
+python examples/vasicek_cir.py
+python examples/nelson_siegel_pca.py
 ```
 
 ## Related Projects
 
-- [Bond Analytics](https://github.com/aharode/bond-analytics) — Project 1: bond pricing, duration, convexity
-- [Macro Dashboard](https://github.com/aharode/macro-dashboard) — Project 3: FRED data, carry/roll strategy, backtester
+- [Bond Analytics](https://github.com/aharode/bond-analytics) — bond pricing, duration, convexity
+- [Macro Dashboard](https://github.com/aharode/macro-dashboard) — FRED data, carry/roll strategy, backtester

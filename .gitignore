@@ -1,0 +1,13 @@
+# dependencies and build output (Vercel builds dist/ on deploy)
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# local
+.DS_Store
+.env
+.vercel/
