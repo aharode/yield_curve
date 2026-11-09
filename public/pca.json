@@ -77,5 +77,56 @@
   "Slope \u2014 short vs long end diverge (steepener/flattener)",
   "Curvature \u2014 belly vs wings (butterfly trade)"
  ],
+ "trades": [
+  {
+   "name": "2s10s steepener",
+   "note": "long 2Y / short 10Y, level-neutral: pure slope exposure",
+   "neutral_to": [
+    "PC1"
+   ],
+   "legs": [
+    {
+     "tenor": 2.0,
+     "dv01": 10000.0
+    },
+    {
+     "tenor": 10.0,
+     "dv01": -10255.66
+    }
+   ],
+   "exposures": [
+    0.0,
+    6141.86,
+    2029.5
+   ]
+  },
+  {
+   "name": "2s5s10s butterfly",
+   "note": "long 5Y belly / short wings, level- and slope-neutral: pure curvature exposure",
+   "neutral_to": [
+    "PC1",
+    "PC2"
+   ],
+   "legs": [
+    {
+     "tenor": 5.0,
+     "dv01": 10000.0
+    },
+    {
+     "tenor": 2.0,
+     "dv01": -5154.46
+    },
+    {
+     "tenor": 10.0,
+     "dv01": -5915.71
+    }
+   ],
+   "exposures": [
+    0.0,
+    0.0,
+    705.14
+   ]
+  }
+ ],
  "generated": "2026-11-09"
 }

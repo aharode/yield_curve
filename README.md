@@ -10,9 +10,9 @@ A Python library and interactive dashboard for yield curve modeling and analysis
 
 **Nelson-Siegel** — auto-fits the Nelson & Siegel (1987) parametric model to the bootstrapped spot curve via OLS grid search on λ. Interactive sliders let you adjust β₀, β₁, β₂, and λ in real time and observe how each parameter shapes the curve.
 
-**PCA** — eigendecomposition of the covariance matrix of daily changes in US Treasury par yields over the last two years (12 tenors, 1M to 30Y), extracting the first three principal components. PC1 (level), PC2 (slope), and PC3 (curvature) loading vectors are displayed as interactive bar charts with factor interpretations. The PCA is computed in Python by `data/build_pca.py` and served to the dashboard as `public/pca.json`.
+**PCA** — eigendecomposition of the covariance matrix of daily changes in US Treasury par yields over the last two years (12 tenors, 1M to 30Y), extracting the first three principal components. PC1 (level), PC2 (slope), and PC3 (curvature) loading vectors are displayed as interactive bar charts with factor interpretations. The loadings are then used to size two curve trades: a 2s10s steepener hedged to be level-neutral (pure slope) and a 2s5s10s butterfly hedged to be level- and slope-neutral (pure curvature), with DV01 per leg and the P&L for a 1 bp move in each factor. Computed in Python by `data/build_dashboard_data.py` and served to the dashboard as `public/pca.json`.
 
-**Vasicek / CIR** — Monte Carlo simulation of Vasicek (1977) short-rate paths, with r₀ set from the live 1Y spot rate. Parameters κ, θ, σ, r₀ are adjustable in real time. A Feller condition check shows whether the CIR (1985) model would keep rates strictly positive (2κθ > σ²). CIR pricing and simulation are in the Python library.
+**Vasicek / CIR** — Vasicek (1977) parameters calibrated by OLS on the discretised SDE to two years of daily 3-month T-bill yields (reported with the standard error of κ and the implied half-life), then Monte Carlo simulation of short-rate paths starting from the latest 3M yield. Parameters κ, θ, σ, r₀ start at the calibration and are adjustable in real time. A Feller condition check shows whether the CIR (1985) model would keep rates strictly positive (2κθ > σ²). CIR pricing and simulation are in the Python library.
 
 ## Python Library
 
@@ -24,7 +24,8 @@ src/
   vasicek.py             # Vasicek/CIR SDEs, Monte Carlo, Ito's Lemma, calibration
 data/
   fetch.py               # US Treasury XML (latest day + history) and FRED fetchers (pure stdlib)
-  build_pca.py           # PCA of Treasury history -> public/pca.json for the dashboard
+  build_dashboard_data.py  # Treasury history -> public/pca.json (PCA, factor-neutral trades)
+                           #   and public/vasicek.json (Vasicek calibration on the 3M bill)
 examples/
   curve_basics.py        # forward rates, live Treasury snapshot
   bootstrapping.py       # par -> spot bootstrapping, pricing off the spot curve
@@ -40,12 +41,12 @@ The dashboard fetches the latest par yields directly from the US Treasury XML fe
 python data/fetch.py
 ```
 
-To refresh the PCA with the latest two years of Treasury history:
+To refresh the PCA and the Vasicek calibration with the latest two years of Treasury history:
 
 ```bash
-python data/build_pca.py     # writes public/pca.json
-git add public/pca.json
-git commit -m "data: refresh PCA"
+python data/build_dashboard_data.py     # writes public/pca.json and public/vasicek.json
+git add public/pca.json public/vasicek.json
+git commit -m "data: refresh dashboard data"
 git push
 ```
 

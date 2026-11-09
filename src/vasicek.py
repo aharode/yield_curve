@@ -297,7 +297,13 @@ def calibrate_vasicek_moments(rates, dt):
         dt:    time step between observations (years)
 
     Returns:
-        {"kappa", "theta", "sigma", "r_squared"}
+        {"kappa", "theta", "sigma", "r_squared",
+         "kappa_se", "half_life_years", "n_obs"}
+
+    kappa_se is the OLS standard error of the AR(1) slope scaled by 1/Δt.
+    With a few years of daily data κ is estimated imprecisely (and biased
+    upward in small samples), so report it with its standard error.
+    half_life_years = ln 2 / κ is None when κ <= 0 (no mean reversion detected).
     """
     n  = len(rates) - 1
     x  = rates[:-1]
@@ -307,8 +313,8 @@ def calibrate_vasicek_moments(rates, dt):
     x_bar = sum(x) / n
     y_bar = sum(y) / n
 
-    beta  = sum((x[i] - x_bar) * (y[i] - y_bar) for i in range(n)) / \
-            sum((x[i] - x_bar)**2 for i in range(n))
+    sxx   = sum((x[i] - x_bar)**2 for i in range(n))
+    beta  = sum((x[i] - x_bar) * (y[i] - y_bar) for i in range(n)) / sxx
     alpha = y_bar - beta * x_bar
 
     kappa = (1 - beta) / dt
@@ -323,11 +329,18 @@ def calibrate_vasicek_moments(rates, dt):
     ss_tot = sum((y[i] - y_bar)**2 for i in range(n))
     r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 0
 
+    # Standard error of the slope (ddof = 2 for intercept + slope)
+    se_beta  = math.sqrt(ss_res / (n - 2) / sxx) if n > 2 else float("nan")
+    kappa_se = se_beta / dt
+
     return {
-        "kappa":     round(kappa, 6),
-        "theta":     round(theta, 6),
-        "sigma":     round(sigma, 6),
-        "r_squared": round(r2, 6),
+        "kappa":           round(kappa, 6),
+        "theta":           round(theta, 6),
+        "sigma":           round(sigma, 6),
+        "r_squared":       round(r2, 6),
+        "kappa_se":        round(kappa_se, 6),
+        "half_life_years": round(math.log(2) / kappa, 4) if kappa > 0 else None,
+        "n_obs":           n,
     }
 
 

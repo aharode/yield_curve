@@ -1,0 +1,17 @@
+{
+ "source": "US Treasury 3-month bill yield (bond-equivalent), daily",
+ "method": "OLS on the discretised SDE: r(t+\u0394t) = \u03b1 + \u03b2\u00b7r(t) + \u03b5, \u0394t = 1/252",
+ "start": "2024-11-12",
+ "end": "2026-11-06",
+ "kappa": 1.549736,
+ "theta": 0.039242,
+ "sigma": 0.00337,
+ "r_squared": 0.994736,
+ "kappa_se": 0.819685,
+ "half_life_years": 0.4473,
+ "n_obs": 496,
+ "mean_reverting": true,
+ "feller": true,
+ "r_last": 0.04190000000000001,
+ "generated": "2026-11-09"
+}

@@ -164,10 +164,15 @@ function fitNS(tenors, yields) {
 }
 
 /* ─── PCA ─────────────────────────────────────────────────────────────────── */
-// Computed offline from real Treasury history by data/build_pca.py (src/pca.py)
+// Computed offline from real Treasury history by data/build_dashboard_data.py (src/pca.py)
 // and served as a static file, so the browser only displays the result.
 const PCA_URL = "/pca.json";
 const tenorLabel = t => t < 1 ? `${Math.round(t * 12)}M` : `${t}Y`;
+const fmtUsd = v => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toLocaleString(undefined, {maximumFractionDigits: 0})}`;
+
+// Vasicek parameters calibrated to the 3M T-bill by data/build_dashboard_data.py
+const VASICEK_URL = "/vasicek.json";
+const usableCalibration = c => c && c.mean_reverting && c.theta > 0 && c.theta < 0.15 && c.kappa < 5;
 
 /* ─── VASICEK ─────────────────────────────────────────────────────────────── */
 function boxMuller() {
@@ -464,7 +469,7 @@ function PCATab(){
 
   if (error) return (
     <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.amber}}>
-      ⚠ PCA data unavailable ({error}). Run <span style={{color:T.blue}}>python data/build_pca.py</span> and redeploy.
+      ⚠ PCA data unavailable ({error}). Run <span style={{color:T.blue}}>python data/build_dashboard_data.py</span> and redeploy.
     </div>
   );
   if (!pca) return (
@@ -575,13 +580,49 @@ function PCATab(){
           </div>
         </div>
       </div>
+
+      {pca.trades?.length > 0 && (<>
+        <Divider/>
+        <Label>PCA-neutral curve trades</Label>
+        <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 14px"}}>
+          DV01 hedge ratios from the loadings above · P&L in $ for a +1bp move in each factor
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+          {pca.trades.map(t=>(
+            <div key={t.name} style={{border:`1px solid ${T.border}`,padding:"14px 16px"}}>
+              <div style={{fontFamily:mono,fontSize:11,color:T.text,marginBottom:4}}>
+                {t.name} <span style={{color:T.muted}}>· {t.neutral_to.join("/")}-neutral</span>
+              </div>
+              <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginBottom:10}}>{t.note}</div>
+              <table style={{width:"100%",fontFamily:mono,fontSize:10,borderCollapse:"collapse"}}>
+                <tbody>
+                  {t.legs.map(l=>(
+                    <tr key={l.tenor}>
+                      <td style={{color:T.muted,padding:"3px 0"}}>{tenorLabel(l.tenor)} DV01</td>
+                      <td style={{textAlign:"right",color:l.dv01>=0?T.blue:T.amber}}>{fmtUsd(l.dv01)}/bp</td>
+                    </tr>
+                  ))}
+                  {t.exposures.map((e,k)=>(
+                    <tr key={k}>
+                      <td style={{color:T.muted,padding:"3px 0"}}>P&L if PC{k+1} +1bp</td>
+                      <td style={{textAlign:"right",color:Math.abs(e)<0.5?T.muted:T.text}}>
+                        {Math.abs(e)<0.5?"0 (neutral)":fmtUsd(e)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      </>)}
     </div>
   );
 }
 
 /* ─── VASICEK TAB ─────────────────────────────────────────────────────────── */
 function VasicekTab({curveData}){
-  // Default r₀ to today's 1Y spot rate if live data is available
+  // Fallback r₀: today's 1Y spot rate if live data is available
   const liveR0 = curveData.find(r=>r.tenor===1)?.spot
                ?? curveData.find(r=>r.tenor===0.5)?.spot
                ?? 3.00;
@@ -589,14 +630,28 @@ function VasicekTab({curveData}){
   const [kappa,setKappa]=useState(0.30);
   const [theta,setTheta]=useState(5.00);
   const [sigma,setSigma]=useState(1.80);
-  const [r0,setR0]=useState(null); // null = not yet initialised
+  const [r0,setR0]=useState(null); // null = use the default below
+  const [cal,setCal]=useState(null);
+  const [calErr,setCalErr]=useState(null);
 
-  // Set r0 once live data arrives
+  // Start the sliders at the market calibration when it is usable
   useEffect(()=>{
-    if (r0===null && curveData.length) setR0(+liveR0.toFixed(2));
-  },[curveData]);
+    fetch(VASICEK_URL)
+      .then(r=>{ if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(c=>{
+        setCal(c);
+        if (usableCalibration(c)) {
+          setKappa(+c.kappa.toFixed(2));
+          setTheta(+(c.theta*100).toFixed(2));
+          setSigma(+(c.sigma*100).toFixed(2));
+        }
+      })
+      .catch(e=>setCalErr(e.message));
+  },[]);
 
-  const effectiveR0 = r0 ?? liveR0;
+  // The model is calibrated to the 3M bill, so r₀ defaults to its last close
+  const defaultR0   = cal ? cal.r_last*100 : liveR0;
+  const effectiveR0 = r0 ?? defaultR0;
   const paths  = genPaths(8,kappa,theta/100,sigma/100,effectiveR0/100);
   const feller = 2*kappa*(theta/100)>Math.pow(sigma/100,2);
   const ert    = theta+(effectiveR0-theta)*Math.exp(-kappa);
@@ -609,7 +664,7 @@ function VasicekTab({curveData}){
           <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{theta.toFixed(2)}%</div>
           <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>E[r<sub>∞</sub>] = θ · rates revert here</div>
         </div>
-        <KpiBlock label="r₀ — today"      value={`${effectiveR0.toFixed(2)}%`}  sub="1Y Treasury spot rate"/>
+        <KpiBlock label="r₀ — today"      value={`${effectiveR0.toFixed(2)}%`}  sub={cal?"3M T-bill, last close":"1Y Treasury spot rate"}/>
         <KpiBlock label="E[r] at 1Y"      value={`${ert.toFixed(3)}%`} sub="θ + (r₀−θ)·e^(−κ)"/>
         <KpiBlock label="Feller condition" value={feller?"✓ holds":"✗ fails"}
           sub={feller?"positive rates guaranteed (CIR)":"negative rates possible"}/>
@@ -646,9 +701,9 @@ function VasicekTab({curveData}){
         </div>
         <div>
           <Label>Model parameters</Label>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>adjust to recalibrate in real time</div>
+          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>start at the market calibration · adjust to explore</div>
           {[
-            {label:"κ — mean reversion speed",value:kappa,set:setKappa,min:0.01,max:2.0, step:0.01,fmt:v=>v.toFixed(2)},
+            {label:"κ — mean reversion speed",value:kappa,set:setKappa,min:0.01,max:5.0, step:0.01,fmt:v=>v.toFixed(2)},
             {label:"θ — long-run mean (%)",   value:theta,set:setTheta,min:0.5, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
             {label:"σ — volatility (%)",      value:sigma,set:setSigma,min:0.1, max:5.0, step:0.05,fmt:v=>v.toFixed(2)+"%"},
             {label:"r₀ — initial rate (%)",   value:effectiveR0,set:setR0,   min:0.1, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
@@ -673,6 +728,21 @@ function VasicekTab({curveData}){
               σ² = {Math.pow(sigma/100,2).toFixed(6)}<br/>
               {feller?"CIR: positive rates guaranteed":"Vasicek: negative rates possible"}
             </div>
+          </div>
+          <div style={{padding:"12px 14px",border:`1px solid ${T.border2}`,marginTop:12}}>
+            <Label color={T.cyan}>Calibrated to market</Label>
+            {cal ? (
+              <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.8}}>
+                3M T-bill · {cal.start} → {cal.end} · {cal.n_obs} days<br/>
+                κ = {cal.kappa.toFixed(2)} (s.e. {cal.kappa_se.toFixed(2)}) · half-life {cal.half_life_years ? `${cal.half_life_years.toFixed(1)}y` : "n/a"}<br/>
+                θ = {(cal.theta*100).toFixed(2)}% · σ = {(cal.sigma*100).toFixed(2)}%<br/>
+                {usableCalibration(cal)
+                  ? "OLS on the discretised SDE; sliders start here."
+                  : "Mean reversion is not identified in this sample; sliders show illustrative defaults."}
+              </div>
+            ) : (
+              <div style={{fontFamily:mono,fontSize:10,color:T.muted}}>{calErr ? `unavailable (${calErr})` : "loading…"}</div>
+            )}
           </div>
         </div>
       </div>

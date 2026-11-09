@@ -189,6 +189,69 @@ def portfolio_pca_risk(loadings_table, positions):
     return result
 
 
+def factor_neutral_trade(tenors, loadings, legs, anchor, neutralize, anchor_dv01=10_000.0):
+    """
+    DV01 weights for a curve trade that has zero exposure to chosen PCs.
+
+    A 1 bp move in PC k moves each yield by loading_k(tenor) bp, so a position
+    with DV01_i at each tenor makes P&L_k = -Σ_i DV01_i · loading_k(tenor_i)
+    dollars (long bonds lose when yields rise). Fixing the DV01 of the
+    `anchor` leg and solving for the other legs so that the exposures to the
+    PCs in `neutralize` are zero gives a factor-neutral trade:
+        - 2s10s steepener, neutral to PC1 (level): a pure slope trade
+        - 2s5s10s butterfly, neutral to PC1 and PC2: a pure curvature trade
+
+    Args:
+        tenors:      tenor list matching the loadings
+        loadings:    [[pc1 loadings], [pc2 loadings], ...]
+        legs:        tenors in the trade, e.g. [2.0, 10.0]
+        anchor:      leg whose DV01 is fixed (positive = long the bond)
+        neutralize:  PC indices to neutralize, e.g. [0] or [0, 1];
+                     needs len(neutralize) == len(legs) - 1
+        anchor_dv01: DV01 of the anchor leg in dollars per bp
+
+    Returns:
+        {"dv01":      {tenor: dollars per bp},
+         "exposures": [P&L in dollars for a +1 bp move in each PC]}
+    """
+    others = [t for t in legs if t != anchor]
+    if len(others) != len(neutralize):
+        raise ValueError("need exactly one neutralized PC per non-anchor leg")
+    idx = {t: tenors.index(t) for t in legs}
+
+    # Solve A w = b: for each PC k, Σ_j w_j L_k(other_j) = -anchor_dv01 · L_k(anchor)
+    A = [[loadings[k][idx[t]] for t in others] for k in neutralize]
+    b = [-anchor_dv01 * loadings[k][idx[anchor]] for k in neutralize]
+    w = _solve_linear(A, b)
+
+    dv01 = {anchor: anchor_dv01, **dict(zip(others, w))}
+    exposures = [
+        -sum(dv01[t] * loadings[k][idx[t]] for t in legs) for k in range(len(loadings))
+    ]
+    return {
+        "dv01":      {t: round(v, 2) for t, v in dv01.items()},
+        "exposures": [round(e, 2) + 0.0 for e in exposures],  # + 0.0 avoids -0.0
+    }
+
+
+def _solve_linear(A, b):
+    """Solve a small dense linear system by Gaussian elimination with pivoting."""
+    n = len(A)
+    M = [row[:] + [b[i]] for i, row in enumerate(A)]
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(M[r][col]))
+        if abs(M[pivot][col]) < 1e-12:
+            raise ValueError("singular system: legs cannot neutralize these PCs")
+        M[col], M[pivot] = M[pivot], M[col]
+        for r in range(col + 1, n):
+            f = M[r][col] / M[col][col]
+            M[r] = [M[r][j] - f * M[col][j] for j in range(n + 1)]
+    x = [0.0] * n
+    for r in range(n - 1, -1, -1):
+        x[r] = (M[r][n] - sum(M[r][j] * x[j] for j in range(r + 1, n))) / M[r][r]
+    return x
+
+
 # ── COVARIANCE & EIGEN ────────────────────────────────────────────────────────
 
 def _covariance(data, M):
