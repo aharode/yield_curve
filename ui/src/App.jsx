@@ -6,21 +6,22 @@ import {
 } from "recharts";
 
 /* ─── DESIGN TOKENS ───────────────────────────────────────────────────────── */
+// Text colours meet WCAG AA contrast (>= 4.5:1) on bg, surf and surf2.
 const T = {
   bg:      "#08090A",
   surf:    "#0D1117",
   surf2:   "#111820",
-  border:  "#1A2030",
-  border2: "#243040",
-  text:    "#D0D8E4",
-  muted:   "#48586A",
-  blue:    "#2A8FD4",
+  border:  "#2A3344",
+  border2: "#3A475C",
+  text:    "#E4EAF2",
+  muted:   "#8D9BAD",
+  blue:    "#4BA3E3",
   blueLo:  "#0D2840",
-  cyan:    "#1AADAD",
+  cyan:    "#2EC4C4",
   cyanLo:  "#082828",
-  green:   "#2A8060",
-  red:     "#A03828",
-  amber:   "#C07818",
+  green:   "#3DAA80",
+  red:     "#E0614F",
+  amber:   "#E09A3A",
   amberLo: "#301A04",
 };
 const mono  = "'IBM Plex Mono', monospace";
@@ -187,7 +188,7 @@ function genPaths(n=8, kappa=0.3, theta=0.05, sigma=0.018, r0=0.03) {
     });
   });
 }
-const PATH_COLORS = ["#2A8FD4","#1AADAD","#4A8EC0","#2A9070","#5090D0","#1A9898","#3A80B8","#2A8060"];
+const PATH_COLORS = ["#4BA3E3","#2EC4C4","#6FB2E6","#3DAA80","#7AB0EE","#29B5B5","#5C9DD8","#47B88C"];
 
 /* ─── GLOBAL CSS ──────────────────────────────────────────────────────────── */
 const css = `
@@ -208,7 +209,7 @@ const css = `
 `;
 
 /* ─── PRIMITIVES ──────────────────────────────────────────────────────────── */
-function Label({children,color,size=9}){
+function Label({children,color,size=10.5}){
   return <div style={{fontFamily:mono,fontSize:size,letterSpacing:"0.16em",textTransform:"uppercase",color:color||T.muted,marginBottom:5}}>{children}</div>;
 }
 function Divider({my=24}){return <div style={{height:1,background:T.border,margin:`${my}px 0`}}/>;}
@@ -217,14 +218,14 @@ function KpiBlock({label,value,sub}){
     <div style={{borderLeft:`1px solid ${T.border}`,paddingLeft:20,paddingRight:20}}>
       <Label>{label}</Label>
       <div style={{fontFamily:serif,fontSize:22,color:T.text,lineHeight:1,letterSpacing:"-0.01em"}}>{value}</div>
-      {sub && <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:5}}>{sub}</div>}
+      {sub && <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,marginTop:5}}>{sub}</div>}
     </div>
   );
 }
 function ChartTip({active,payload,label,suffix=""}){
   if (!active||!payload?.length) return null;
   return (
-    <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"10px 14px",fontFamily:mono,fontSize:11}}>
+    <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"10px 14px",fontFamily:mono,fontSize:12}}>
       <div style={{color:T.blue,marginBottom:6}}>{label}{suffix}</div>
       {payload.map((p,i)=>(
         <div key={i} style={{color:p.color,marginBottom:2}}>
@@ -241,7 +242,7 @@ function BootstrapTab({curveData,loading,error,date}){
   if(loading) return (
     <div className="fade-3" style={{padding:"48px 44px",display:"flex",alignItems:"center",gap:14}}>
       <div className="spinner"/>
-      <span style={{fontFamily:mono,fontSize:11,color:T.muted}}>fetching US Treasury yield curve...</span>
+      <span style={{fontFamily:mono,fontSize:12,color:T.muted}}>fetching US Treasury yield curve...</span>
     </div>
   );
 
@@ -252,8 +253,8 @@ function BootstrapTab({curveData,loading,error,date}){
   return (
     <div className="fade-3" style={{padding:"32px 44px",overflowY:"auto",height:"100%"}}>
       {error && (
-        <div style={{padding:"10px 14px",background:T.amberLo,border:`1px solid ${T.amber}`,marginBottom:24,fontFamily:mono,fontSize:10,color:T.amber,lineHeight:1.8}}>
-          ⚠ CORS blocked — showing fallback data. Run <span style={{color:T.blue}}>python data/fetch.py</span> + redeploy for live data.
+        <div style={{padding:"10px 14px",background:T.amberLo,border:`1px solid ${T.amber}`,marginBottom:24,fontFamily:mono,fontSize:11.5,color:T.amber,lineHeight:1.8}}>
+          ⚠ Couldn't reach the US Treasury feed — showing fallback data. Reload to try again.
         </div>
       )}
 
@@ -263,7 +264,7 @@ function BootstrapTab({curveData,loading,error,date}){
           <div style={{fontFamily:serif,fontSize:44,color:spread>=0?T.blue:T.red,lineHeight:1}}>
             {spread>=0?"+":""}{(spread*100).toFixed(0)} bps
           </div>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,marginTop:6}}>
             {spread>=0?"normal · upward sloping":"inverted · recession signal"}
           </div>
         </div>
@@ -277,7 +278,7 @@ function BootstrapTab({curveData,loading,error,date}){
       <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:48}}>
         <div>
           <Label>Par · spot · forward curves</Label>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,margin:"6px 0 18px"}}>
             <span style={{color:T.blue}}>——</span>&ensp;Spot&emsp;
             <span style={{color:T.cyan}}>——</span>&ensp;Par&emsp;
             <span style={{color:T.muted}}>– –</span>&ensp;Forward
@@ -286,9 +287,9 @@ function BootstrapTab({curveData,loading,error,date}){
             <LineChart data={rows} margin={{top:4,right:8,bottom:4,left:8}}>
               <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
               <XAxis dataKey="tenor" type="number" domain={[0,31]} stroke={T.border}
-                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
-              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickLine={false} axisLine={false} width={44} tickFormatter={v=>`${v.toFixed(1)}%`}/>
               <Tooltip content={<ChartTip suffix="Y"/>} cursor={{stroke:T.border}}/>
               <Line type="monotone" dataKey="spot" stroke={T.blue}  strokeWidth={2}   dot={<CustomDot/>} name="Spot"/>
@@ -300,14 +301,14 @@ function BootstrapTab({curveData,loading,error,date}){
 
         <div>
           <Label>Bootstrapped spot rates</Label>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 14px"}}>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,margin:"6px 0 14px"}}>
             recursive extraction · semi-annual compounding
           </div>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr>
               {["Tenor","Par","Spot","Δ"].map((h,i)=>(
                 <th key={h} style={{padding:"0 0 8px",textAlign:i===0?"left":"right",
-                  fontFamily:mono,fontWeight:400,fontSize:9,letterSpacing:"0.12em",
+                  fontFamily:mono,fontWeight:400,fontSize:11,letterSpacing:"0.12em",
                   textTransform:"uppercase",color:T.muted,borderBottom:`1px solid ${T.border}`}}>{h}</th>
               ))}
             </tr></thead>
@@ -316,10 +317,10 @@ function BootstrapTab({curveData,loading,error,date}){
                 const d = s.spot-s.par;
                 return (
                   <tr key={s.tenor} className="row-h">
-                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,color:T.muted,borderBottom:`1px solid ${T.border}`}}>{s.tenor}Y</td>
-                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,textAlign:"right",color:T.text,borderBottom:`1px solid ${T.border}`}}>{s.par.toFixed(2)}%</td>
-                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,textAlign:"right",color:T.blue,borderBottom:`1px solid ${T.border}`}}>{s.spot.toFixed(3)}%</td>
-                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:11,textAlign:"right",
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:12,color:T.muted,borderBottom:`1px solid ${T.border}`}}>{s.tenor}Y</td>
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:12,textAlign:"right",color:T.text,borderBottom:`1px solid ${T.border}`}}>{s.par.toFixed(2)}%</td>
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:12,textAlign:"right",color:T.blue,borderBottom:`1px solid ${T.border}`}}>{s.spot.toFixed(3)}%</td>
+                    <td style={{padding:"7px 0",fontFamily:mono,fontSize:12,textAlign:"right",
                       color:d>=0?T.green:T.red,borderBottom:`1px solid ${T.border}`}}>
                       {d>=0?"+":""}{(d*100).toFixed(1)}bp
                     </td>
@@ -330,7 +331,7 @@ function BootstrapTab({curveData,loading,error,date}){
           </table>
           <div style={{marginTop:16,padding:"12px 14px",background:T.blueLo,border:`1px solid ${T.border2}`}}>
             <Label color={T.blue}>No-arbitrage condition</Label>
-            <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.8}}>
+            <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,lineHeight:1.8}}>
               (1+s₂)² = (1+s₁) × (1+f(1,2))<br/>
               f(T₁,T₂) = [(1+s₂)^T₂/(1+s₁)^T₁]^(1/(T₂−T₁)) − 1
             </div>
@@ -356,7 +357,7 @@ function NelsonSiegelTab({curveData, fetchDate}){
   }, [curveData]);
 
   if (!manual) return (
-    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.muted}}>
+    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:12,color:T.muted}}>
       <div className="spinner"/> &ensp;Fitting Nelson-Siegel…
     </div>
   );
@@ -377,7 +378,7 @@ function NelsonSiegelTab({curveData, fetchDate}){
         <div>
           <Label color={T.blue}>β₀ — level</Label>
           <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{b0.toFixed(2)}%</div>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>long-run yield as τ→∞</div>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,marginTop:6}}>long-run yield as τ→∞</div>
         </div>
         <KpiBlock label="β₁ — slope"     value={`${b1.toFixed(2)}%`} sub={`β₀+β₁ = ${(b0+b1).toFixed(2)}% (short rate)`}/>
         <KpiBlock label="β₂ — curvature" value={`${b2.toFixed(2)}%`} sub="medium-term hump / belly"/>
@@ -389,7 +390,7 @@ function NelsonSiegelTab({curveData, fetchDate}){
       <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:48}}>
         <div>
           <Label>Nelson-Siegel fitted curve</Label>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,margin:"6px 0 18px"}}>
             <span style={{color:T.blue}}>——</span>&ensp;NS fitted&emsp;
             <span style={{color:T.cyan}}>◆</span>&ensp;Observed spot rates&emsp;
             {fetchDate && fetchDate !== "—" && <span>· as of {fetchDate}</span>}
@@ -398,9 +399,9 @@ function NelsonSiegelTab({curveData, fetchDate}){
             <LineChart margin={{top:4,right:8,bottom:4,left:8}}>
               <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
               <XAxis dataKey="tenor" type="number" domain={[0,31]} stroke={T.border}
-                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
-              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickLine={false} axisLine={false} width={44} tickFormatter={v=>`${v.toFixed(1)}%`}/>
               <Tooltip content={<ChartTip suffix="Y"/>} cursor={{stroke:T.border}}/>
               <Line data={fittedCurve} type="monotone" dataKey="fitted"
@@ -413,7 +414,7 @@ function NelsonSiegelTab({curveData, fetchDate}){
 
         <div>
           <Label>Adjust parameters</Label>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,margin:"6px 0 18px"}}>
             drag to explore · OLS auto-fits on load
           </div>
           {[
@@ -425,7 +426,7 @@ function NelsonSiegelTab({curveData, fetchDate}){
             <div key={key} style={{marginBottom:20}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
                 <Label>{label}</Label>
-                <span style={{fontFamily:mono,fontSize:11,color:T.blue}}>
+                <span style={{fontFamily:mono,fontSize:12,color:T.blue}}>
                   {manual[key].toFixed(2)}{key==="lam"?"Y":"%"}
                 </span>
               </div>
@@ -436,13 +437,13 @@ function NelsonSiegelTab({curveData, fetchDate}){
           ))}
           <button onClick={()=>setManual(params)}
             style={{width:"100%",padding:"8px 0",background:T.blueLo,border:`1px solid ${T.border2}`,
-              color:T.blue,fontFamily:mono,fontSize:9,letterSpacing:"0.14em",
+              color:T.blue,fontFamily:mono,fontSize:11,letterSpacing:"0.14em",
               textTransform:"uppercase",cursor:"pointer",marginBottom:16}}>
             reset to fitted
           </button>
           <div style={{padding:"12px 14px",background:T.blueLo,border:`1px solid ${T.border2}`}}>
             <Label color={T.blue}>NS formula</Label>
-            <div style={{fontFamily:mono,fontSize:9,color:T.muted,lineHeight:2.0}}>
+            <div style={{fontFamily:mono,fontSize:11,color:T.muted,lineHeight:2.0}}>
               y(τ) = β₀<br/>
               &emsp;+ β₁·(1−e^(−τ/λ))/(τ/λ)<br/>
               &emsp;+ β₂·[(1−e^(−τ/λ))/(τ/λ) − e^(−τ/λ)]
@@ -468,12 +469,12 @@ function PCATab(){
   },[]);
 
   if (error) return (
-    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.amber}}>
+    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:12,color:T.amber}}>
       ⚠ PCA data unavailable ({error}). Run <span style={{color:T.blue}}>python data/build_dashboard_data.py</span> and redeploy.
     </div>
   );
   if (!pca) return (
-    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:11,color:T.muted}}>
+    <div className="fade-3" style={{padding:"48px 44px",fontFamily:mono,fontSize:12,color:T.muted}}>
       <div className="spinner"/> &ensp;Loading PCA…
     </div>
   );
@@ -497,8 +498,8 @@ function PCATab(){
         <div>
           <Label color={T.blue}>Variance explained</Label>
           <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{totalVar.toFixed(1)}%</div>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>first 3 components</div>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:4}}>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,marginTop:6}}>first 3 components</div>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,marginTop:4}}>
             daily Δ par yields · {pca.start} → {pca.end} · {pca.n_obs} days
           </div>
         </div>
@@ -518,7 +519,7 @@ function PCATab(){
                 style={{padding:"6px 14px",background:activePC===k?m.color+"22":"transparent",
                   border:`1px solid ${activePC===k?m.color:T.border}`,
                   color:activePC===k?m.color:T.muted,
-                  fontFamily:mono,fontSize:9,letterSpacing:"0.12em",
+                  fontFamily:mono,fontSize:11,letterSpacing:"0.12em",
                   textTransform:"uppercase",cursor:"pointer",transition:"all 0.12s"}}>
                 {m.label}
               </button>
@@ -528,12 +529,12 @@ function PCATab(){
             <BarChart data={loadingData} margin={{top:4,right:4,bottom:4,left:0}} barSize={22}>
               <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
               <XAxis dataKey="tenor" stroke={T.border}
-                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickLine={false} axisLine={{stroke:T.border}}/>
-              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickLine={false} axisLine={false} width={48} tickFormatter={v=>v.toFixed(2)}/>
               <Tooltip content={({active,payload,label})=>active&&payload?.length?(
-                <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"8px 12px",fontFamily:mono,fontSize:11}}>
+                <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"8px 12px",fontFamily:mono,fontSize:12}}>
                   <div style={{color:pcMeta.color,marginBottom:4}}>{label}</div>
                   <div style={{color:T.text}}>Loading: {payload[0]?.value?.toFixed(4)}</div>
                 </div>
@@ -541,7 +542,7 @@ function PCATab(){
               <ReferenceLine y={0} stroke={T.border2}/>
               <Bar dataKey="loading" radius={[2,2,0,0]}>
                 {loadingData.map((d,i)=>(
-                  <Cell key={i} fill={d.loading>=0?pcMeta.color:pcMeta.color+"55"}/>
+                  <Cell key={i} fill={d.loading>=0?pcMeta.color:pcMeta.color+"AA"}/>
                 ))}
               </Bar>
             </BarChart>
@@ -558,19 +559,19 @@ function PCATab(){
                   background:activePC===k?m.color+"0A":"transparent",
                   cursor:"pointer",transition:"all 0.12s"}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                  <span style={{fontFamily:mono,fontSize:10,
+                  <span style={{fontFamily:mono,fontSize:11.5,
                     color:activePC===k?m.color:T.muted,
                     letterSpacing:"0.1em",textTransform:"uppercase"}}>{m.label}</span>
-                  <span style={{fontFamily:mono,fontSize:10,color:m.color}}>
+                  <span style={{fontFamily:mono,fontSize:11.5,color:m.color}}>
                     {pcs[k].variancePct.toFixed(1)}%
                   </span>
                 </div>
-                <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.7}}>{m.desc}</div>
+                <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,lineHeight:1.7}}>{m.desc}</div>
               </div>
             ))}
             <div style={{padding:"12px 14px",background:T.blueLo,border:`1px solid ${T.border2}`}}>
               <Label color={T.blue}>Eigendecomposition</Label>
-              <div style={{fontFamily:mono,fontSize:9,color:T.muted,lineHeight:2.0}}>
+              <div style={{fontFamily:mono,fontSize:11,color:T.muted,lineHeight:2.0}}>
                 Σ = V · Λ · Vᵀ<br/>
                 Σ = cov(Δyields) across maturities<br/>
                 Columns of V = loading vectors<br/>
@@ -584,17 +585,17 @@ function PCATab(){
       {pca.trades?.length > 0 && (<>
         <Divider/>
         <Label>PCA-neutral curve trades</Label>
-        <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 14px"}}>
+        <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,margin:"6px 0 14px"}}>
           DV01 hedge ratios from the loadings above · P&L in $ for a +1bp move in each factor
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
           {pca.trades.map(t=>(
             <div key={t.name} style={{border:`1px solid ${T.border}`,padding:"14px 16px"}}>
-              <div style={{fontFamily:mono,fontSize:11,color:T.text,marginBottom:4}}>
+              <div style={{fontFamily:mono,fontSize:12,color:T.text,marginBottom:4}}>
                 {t.name} <span style={{color:T.muted}}>· {t.neutral_to.join("/")}-neutral</span>
               </div>
-              <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginBottom:10}}>{t.note}</div>
-              <table style={{width:"100%",fontFamily:mono,fontSize:10,borderCollapse:"collapse"}}>
+              <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,marginBottom:10}}>{t.note}</div>
+              <table style={{width:"100%",fontFamily:mono,fontSize:11.5,borderCollapse:"collapse"}}>
                 <tbody>
                   {t.legs.map(l=>(
                     <tr key={l.tenor}>
@@ -662,7 +663,7 @@ function VasicekTab({curveData}){
         <div>
           <Label color={T.blue}>Long-run mean θ</Label>
           <div style={{fontFamily:serif,fontSize:44,color:T.blue,lineHeight:1}}>{theta.toFixed(2)}%</div>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,marginTop:6}}>E[r<sub>∞</sub>] = θ · rates revert here</div>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,marginTop:6}}>E[r<sub>∞</sub>] = θ · rates revert here</div>
         </div>
         <KpiBlock label="r₀ — today"      value={`${effectiveR0.toFixed(2)}%`}  sub={cal?"3M T-bill, last close":"1Y Treasury spot rate"}/>
         <KpiBlock label="E[r] at 1Y"      value={`${ert.toFixed(3)}%`} sub="θ + (r₀−θ)·e^(−κ)"/>
@@ -673,7 +674,7 @@ function VasicekTab({curveData}){
       <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.6fr",gap:48}}>
         <div>
           <Label>Monte Carlo short rate paths</Label>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,margin:"6px 0 18px"}}>
             dr = κ(θ−r)dt + σdW · 8 sample paths · mean reversion to&ensp;
             <span style={{color:T.blue}}>θ = {theta.toFixed(2)}%</span>
           </div>
@@ -681,27 +682,27 @@ function VasicekTab({curveData}){
             <LineChart margin={{top:4,right:8,bottom:4,left:8}}>
               <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
               <XAxis dataKey="t" type="number" domain={[0,5]} stroke={T.border}
-                tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
+                tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
-              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:9,fontFamily:mono}}
-                tickLine={false} axisLine={false} width={44} tickFormatter={v=>`${v.toFixed(1)}%`}/>
-              <ReferenceLine y={theta} stroke={T.blue} strokeDasharray="4 3" strokeOpacity={0.5}/>
+              <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
+                tickLine={false} axisLine={false} width={44} domain={["auto","auto"]} tickFormatter={v=>`${v.toFixed(1)}%`}/>
+              <ReferenceLine y={theta} stroke={T.blue} strokeDasharray="4 3" strokeOpacity={0.85}/>
               <Tooltip content={({active,payload,label})=>active&&payload?.length?(
-                <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"8px 12px",fontFamily:mono,fontSize:11}}>
+                <div style={{background:T.surf,border:`1px solid ${T.border2}`,padding:"8px 12px",fontFamily:mono,fontSize:12}}>
                   <div style={{color:T.blue,marginBottom:4}}>t = {parseFloat(label).toFixed(2)}Y</div>
                   {payload.slice(0,4).map((p,i)=><div key={i} style={{color:p.color}}>{p.value?.toFixed(3)}%</div>)}
                 </div>
               ):null} cursor={{stroke:T.border}}/>
               {paths.map((path,i)=>(
                 <Line key={i} data={path} dataKey="r" type="monotone"
-                  stroke={PATH_COLORS[i]} strokeWidth={1} dot={false} strokeOpacity={0.65} name={`Path ${i+1}`}/>
+                  stroke={PATH_COLORS[i]} strokeWidth={1.5} dot={false} strokeOpacity={0.9} name={`Path ${i+1}`}/>
               ))}
             </LineChart>
           </ResponsiveContainer>
         </div>
         <div>
           <Label>Model parameters</Label>
-          <div style={{fontFamily:mono,fontSize:10,color:T.muted,margin:"6px 0 18px"}}>start at the market calibration · adjust to explore</div>
+          <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,margin:"6px 0 18px"}}>start at the market calibration · adjust to explore</div>
           {[
             {label:"κ — mean reversion speed",value:kappa,set:setKappa,min:0.01,max:5.0, step:0.01,fmt:v=>v.toFixed(2)},
             {label:"θ — long-run mean (%)",   value:theta,set:setTheta,min:0.5, max:10.0,step:0.1, fmt:v=>v.toFixed(2)+"%"},
@@ -711,7 +712,7 @@ function VasicekTab({curveData}){
             <div key={label} style={{marginBottom:20}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
                 <Label>{label}</Label>
-                <span style={{fontFamily:mono,fontSize:11,color:T.blue}}>{fmt(value)}</span>
+                <span style={{fontFamily:mono,fontSize:12,color:T.blue}}>{fmt(value)}</span>
               </div>
               <input type="range" min={min} max={max} step={step} value={value}
                 onChange={e=>set(parseFloat(e.target.value))}
@@ -723,7 +724,7 @@ function VasicekTab({curveData}){
             <Label color={feller?T.blue:T.amber}>
               {feller?"Feller condition satisfied":"Feller condition violated"}
             </Label>
-            <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.8}}>
+            <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,lineHeight:1.8}}>
               2κθ = {(2*kappa*theta/100).toFixed(4)}<br/>
               σ² = {Math.pow(sigma/100,2).toFixed(6)}<br/>
               {feller?"CIR: positive rates guaranteed":"Vasicek: negative rates possible"}
@@ -732,7 +733,7 @@ function VasicekTab({curveData}){
           <div style={{padding:"12px 14px",border:`1px solid ${T.border2}`,marginTop:12}}>
             <Label color={T.cyan}>Calibrated to market</Label>
             {cal ? (
-              <div style={{fontFamily:mono,fontSize:10,color:T.muted,lineHeight:1.8}}>
+              <div style={{fontFamily:mono,fontSize:11.5,color:T.muted,lineHeight:1.8}}>
                 3M T-bill · {cal.start} → {cal.end} · {cal.n_obs} days<br/>
                 κ = {cal.kappa.toFixed(2)} (s.e. {cal.kappa_se.toFixed(2)}) · half-life {cal.half_life_years ? `${cal.half_life_years.toFixed(1)}y` : "n/a"}<br/>
                 θ = {(cal.theta*100).toFixed(2)}% · σ = {(cal.sigma*100).toFixed(2)}%<br/>
@@ -741,7 +742,7 @@ function VasicekTab({curveData}){
                   : "Mean reversion is not identified in this sample; sliders show illustrative defaults."}
               </div>
             ) : (
-              <div style={{fontFamily:mono,fontSize:10,color:T.muted}}>{calErr ? `unavailable (${calErr})` : "loading…"}</div>
+              <div style={{fontFamily:mono,fontSize:11.5,color:T.muted}}>{calErr ? `unavailable (${calErr})` : "loading…"}</div>
             )}
           </div>
         </div>
@@ -814,16 +815,16 @@ export default function App(){
           <div style={{width:2,height:18,background:T.blue}}/>
           <span style={{fontFamily:serif,fontSize:15,color:T.text}}>Yield Curve Suite</span>
           <div style={{width:1,height:14,background:T.border}}/>
-          <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.18em",textTransform:"uppercase",color:T.muted}}>
+          <span style={{fontFamily:mono,fontSize:11,letterSpacing:"0.18em",textTransform:"uppercase",color:T.muted}}>
             Bootstrap · Nelson-Siegel · PCA · Vasicek
           </span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:20}}>
-          <span style={{fontFamily:mono,fontSize:9,color:isLive?T.green:error?T.amber:T.muted}}>
+          <span style={{fontFamily:mono,fontSize:11,color:isLive?T.green:error?T.amber:T.muted}}>
             {loading?"fetching...":isLive?`● live · ${fetchDate}`:`⚠ fallback · ${fetchDate}`}
           </span>
           <div style={{width:1,height:12,background:T.border}}/>
-          <span style={{fontFamily:mono,fontSize:9,color:T.muted}}>
+          <span style={{fontFamily:mono,fontSize:11,color:T.muted}}>
             {new Date().toLocaleDateString("en-US",{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()}
           </span>
         </div>
@@ -843,8 +844,8 @@ export default function App(){
         ].map(([k,v],i)=>(
           <div key={k} style={{display:"flex",alignItems:"center"}}>
             {i>0&&<div style={{width:1,height:12,background:T.border,margin:"0 14px"}}/>}
-            <span style={{fontFamily:mono,fontSize:9,color:T.muted,marginRight:6,letterSpacing:"0.1em",textTransform:"uppercase"}}>{k}</span>
-            <span style={{fontFamily:mono,fontSize:10,
+            <span style={{fontFamily:mono,fontSize:11,color:T.muted,marginRight:6,letterSpacing:"0.1em",textTransform:"uppercase"}}>{k}</span>
+            <span style={{fontFamily:mono,fontSize:11.5,
               color:k==="Source"&&isLive?T.green:k==="As of"&&isLive?T.green:T.blue,
               fontWeight:500}}>{v}</span>
           </div>
@@ -859,7 +860,7 @@ export default function App(){
             background:"transparent",border:"none",
             borderBottom:`1px solid ${tab===id?T.blue:"transparent"}`,
             color:tab===id?T.blue:T.muted,
-            fontFamily:mono,fontSize:9,letterSpacing:"0.16em",
+            fontFamily:mono,fontSize:11,letterSpacing:"0.16em",
             textTransform:"uppercase",cursor:"pointer",
           }}>{l}</button>
         ))}
