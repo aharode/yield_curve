@@ -4,7 +4,7 @@ Bootstrapping the Spot Curve
 
 import sys
 sys.path.insert(0, ".")
-from src.bootstrapper import bootstrap_spot_rates, forward_rate, interpolate_curve, price_from_spot_curve
+from src.bootstrapper import bootstrap_spot_rates, interpolate_curve, price_from_spot_curve
 
 
 def separator(title):
@@ -31,7 +31,7 @@ par_2 = [(0.5, s_6m_given), (1.0, 5.0)]
 spots_2 = bootstrap_spot_rates(par_2)
 
 print(f"Given s_6m = {s_6m_given}%")
-print(f"1Y Treasury: coupon = 5%, price = 100 (par bond)")
+print("1Y Treasury: coupon = 5%, price = 100 (par bond)")
 print()
 print("Manual derivation:")
 print("  100 = 2.5 / (1 + 0.05/2) + 102.5 / (1 + s_1y/2)^2")
@@ -66,7 +66,7 @@ s_15_half = ((coupon_semi + 100) / remaining) ** (1/3) - 1
 s_15 = s_15_half * 2 * 100
 
 print(f"s_6m={s_6m*100}%, s_1y={s_1y*100}%")
-print(f"1.5Y bond: coupon 5.5%, price 100.50")
+print("1.5Y bond: coupon 5.5%, price 100.50")
 print(f"PV(6M CF) = {pv_1:.4f}")
 print(f"PV(1Y CF) = {pv_2:.4f}")
 print(f"PV remaining = {remaining:.4f}")
@@ -82,7 +82,7 @@ result = price_from_spot_curve(coupon_rate_pct=6.0, tenor_years=2.0,
                                spot_rates=spot_rates_4, face=100.0)
 
 print(f"Spot rates: {spot_rates_4}")
-print(f"6% semi-annual coupon, 2Y maturity, face = 100")
+print("6% semi-annual coupon, 2Y maturity, face = 100")
 print()
 print(f"{'Period':>6}  {'t(Y)':>5}  {'CF':>6}  {'Spot%':>7}  {'DF':>8}  {'PV':>8}")
 print("-" * 50)
@@ -103,8 +103,8 @@ known = [(2.0, 5.5), (5.0, 6.0)]
 targets = [3.0, 4.0]
 interp  = interpolate_curve(known, targets)
 
-print(f"s_2y = 5.5%, s_5y = 6.0%")
-print(f"Linear interpolation: s_t = s_2 + (s_5 - s_2) × (t - 2) / (5 - 2)")
+print("s_2y = 5.5%, s_5y = 6.0%")
+print("Linear interpolation: s_t = s_2 + (s_5 - s_2) × (t - 2) / (5 - 2)")
 print()
 for t, s in interp:
     manual = 5.5 + (6.0 - 5.5) * (t - 2) / (5 - 2)

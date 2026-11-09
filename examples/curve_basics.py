@@ -2,9 +2,10 @@
 Yield Curve Basics.
 """
 
+import math
 import sys
 sys.path.insert(0, ".")
-from src.bootstrapper import forward_rate, bootstrap_spot_rates, curve_summary
+from src.bootstrapper import forward_rate, curve_summary
 
 
 def separator(title):
@@ -26,8 +27,7 @@ print(f"f(1,2) = {f_1_2:.4f}%   [1Y forward rate, 1Y from now]")
 print(f"f(2,3) = {f_2_3:.4f}%   [1Y forward rate, 2Y from now]")
 print()
 print("Manual check f(1,2):")
-print(f"  (1 + s2/2)^2 / (1 + s1/2)^2 - 1 (annual approx)")
-import math
+print("  (1 + s2/2)^2 / (1 + s1/2)^2 - 1 (annual approx)")
 manual = ((1 + s2/200)**2 / (1 + s1/200)**2 - 1) * 2 * 100
 print(f"  = {manual:.4f}% (semi-annual conv)")
 

@@ -9,7 +9,7 @@ from src.vasicek import (
     vasicek_expected_rate, vasicek_variance,
     vasicek_bond_price, vasicek_yield,
     feller_condition, itos_lemma_demo,
-    calibrate_vasicek_moments,
+    cir_bond_price, cir_yield,
 )
 import math
 
@@ -63,7 +63,7 @@ separator("Problem 2 — Monte Carlo path simulation (500 paths)")
 
 sim = simulate_vasicek(R0, KAPPA, THETA, SIGMA, T=1.0, dt=DT, n_paths=500, seed=42)
 print(f"Simulated {len(sim['paths'])} paths over 1 year (monthly steps)")
-print(f"\nCross-sectional stats at t=1Y (month 12):")
+print("\nCross-sectional stats at t=1Y (month 12):")
 
 final_rates = [p[-1] for p in sim["paths"]]
 final_rates.sort()
@@ -129,7 +129,6 @@ print(f"Feller condition: 2κθ = {lhs:.4f} > σ² = {rhs:.4f}? {ok}")
 print()
 
 # Vasicek bond price vs CIR at low rates
-from src.vasicek import cir_bond_price, cir_yield
 print(f"{'Tenor':>6}  {'Vasicek P':>12}  {'Vasicek y%':>12}  {'CIR P':>10}  {'CIR y%':>10}")
 print("-" * 58)
 for tau in [1, 2, 5, 10, 30]:

@@ -22,7 +22,6 @@ Key formulas (semi-annual compounding, par bonds priced at 100):
         s_t = s_T1 + (s_T2 - s_T1) * (t - T1) / (T2 - T1)
 """
 
-import math
 
 
 # ── CORE BOOTSTRAPPING ────────────────────────────────────────────────────────

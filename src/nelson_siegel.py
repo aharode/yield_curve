@@ -248,7 +248,7 @@ if __name__ == "__main__":
 
     result = fit_ns(tenors, yields_pct)
 
-    print(f"Fitted parameters:")
+    print("Fitted parameters:")
     print(f"  β₀ = {result['beta0']:.4f}%  (long-run level)")
     print(f"  β₁ = {result['beta1']:.4f}%  (slope)")
     print(f"  β₂ = {result['beta2']:.4f}%  (curvature)")
@@ -257,10 +257,10 @@ if __name__ == "__main__":
 
     interp = interpret_params(result['beta0'], result['beta1'],
                                result['beta2'], result['lambda'])
-    print(f"\nInterpretation:")
+    print("\nInterpretation:")
     for k, v in interp.items():
         print(f"  {k}: {v}")
 
-    print(f"\nResiduals (bp):")
+    print("\nResiduals (bp):")
     for t, r in result['residuals']:
         print(f"  {t}Y: {r:+.2f} bp")
