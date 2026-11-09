@@ -286,7 +286,7 @@ function BootstrapTab({curveData,loading,error,date}){
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={rows} margin={{top:4,right:8,bottom:4,left:8}}>
               <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
-              <XAxis dataKey="tenor" type="number" domain={[0,31]} stroke={T.border}
+              <XAxis dataKey="tenor" type="number" domain={[0,31]} ticks={[0,5,10,20,30]} stroke={T.border}
                 tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
               <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
@@ -398,7 +398,7 @@ function NelsonSiegelTab({curveData, fetchDate}){
           <ResponsiveContainer width="100%" height={280}>
             <LineChart margin={{top:4,right:8,bottom:4,left:8}}>
               <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
-              <XAxis dataKey="tenor" type="number" domain={[0,31]} stroke={T.border}
+              <XAxis dataKey="tenor" type="number" domain={[0,31]} ticks={[0,5,10,20,30]} stroke={T.border}
                 tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
                 tickFormatter={v=>`${v}Y`} tickLine={false} axisLine={{stroke:T.border}}/>
               <YAxis stroke={T.border} tick={{fill:T.muted,fontSize:11,fontFamily:mono}}
@@ -785,7 +785,7 @@ export default function App(){
       .catch(err=>{
         setError(err.message);
         setCurveData(FALLBACK);
-        setFetchDate("fallback");
+        setFetchDate("fallback data");
         setLoading(false);
       });
   },[]);
@@ -821,7 +821,7 @@ export default function App(){
         </div>
         <div style={{display:"flex",alignItems:"center",gap:20}}>
           <span style={{fontFamily:mono,fontSize:11,color:isLive?T.green:error?T.amber:T.muted}}>
-            {loading?"fetching...":isLive?`● live · ${fetchDate}`:`⚠ fallback · ${fetchDate}`}
+            {loading?"fetching...":isLive?`● live · ${fetchDate}`:"⚠ fallback data"}
           </span>
           <div style={{width:1,height:12,background:T.border}}/>
           <span style={{fontFamily:mono,fontSize:11,color:T.muted}}>
@@ -839,7 +839,7 @@ export default function App(){
           ["10Y",   r10 ?`${r10.toFixed(2)}%`:"—"],
           ["30Y",   r30 ?`${r30.toFixed(2)}%`:"—"],
           ["2s10s", r10 ?`${spread>=0?"+":""}${(spread*100).toFixed(0)}bp`:"—"],
-          ["As of", isLive ? fetchDate : "stub data"],
+          ["As of", isLive ? fetchDate : "fallback data"],
           ["Source","US Treasury · bootstrapped"],
         ].map(([k,v],i)=>(
           <div key={k} style={{display:"flex",alignItems:"center"}}>
