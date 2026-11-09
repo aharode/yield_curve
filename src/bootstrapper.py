@@ -1,16 +1,18 @@
 """
-src/bootstrapper.py — Day 4 & 5
+src/bootstrapper.py
 
 Extracts spot (zero-coupon) rates from par yields recursively.
-Implements the bootstrapping algorithm from the study guide exactly.
 
-Key formulas:
-    Step 1 (6M T-bill, zero coupon):
-        s_6m = 2 * (F/P - 1)
+Key formulas (semi-annual compounding, par bonds priced at 100):
+    Bills (maturity <= 6M, a single cash flow):
+        spot = par yield (bond-equivalent)
 
-    Step 2+ (coupon bonds):
-        P = Σ [C/2 / (1 + s_t/2)^t]  +  (C/2 + F) / (1 + s_T/2)^T
-        Solve for s_T — only unknown at each step.
+    Coupon bonds:
+        1 = Σ_{k<N} (c/2) / (1 + s_k/2)^k  +  (1 + c/2) / (1 + s_N/2)^N
+        Coupon dates between the last known tenor and T_N use spot rates
+        linearly interpolated toward the unknown s_N, so s_N is solved
+        numerically (bisection). Every input par bond then reprices to
+        exactly 100 off the final curve.
 
     Forward rates (no-arbitrage):
         f(T1, T2) = [(1 + s_T2/2)^(2*T2) / (1 + s_T1/2)^(2*T1)]^(1/(2*(T2-T1))) - 1
@@ -27,63 +29,67 @@ import math
 
 def bootstrap_spot_rates(par_yields, face=100.0):
     """
-    Bootstrap spot rates from par yields using recursive extraction.
+    Bootstrap spot rates from par yields.
 
     Args:
         par_yields: list of (tenor_years, par_yield_percent)
-                    sorted ascending by tenor.
-                    e.g. [(0.5, 5.30), (1.0, 5.10), (2.0, 4.80), ...]
-        face:       face value (default 100)
+                    e.g. [(0.083, 4.05), (0.5, 4.23), (1.0, 4.33), (2.0, 4.51), ...]
+        face:       face value (kept for API compatibility; results are per unit face)
 
     Returns:
         list of (tenor_years, spot_rate_percent) sorted ascending
 
     Algorithm (semi-annual compounding throughout):
-        - 0.5Y: direct from T-bill price (zero coupon)
-        - 1Y+ : strip out known cash flows using already-derived spot rates,
-                solve for the new spot rate algebraically.
-
-    The par yield convention means each bond prices AT PAR (price = face).
-    So for a par bond: coupon = par_yield, and price = face.
+        - Maturities of 6M or less (T-bills) pay a single cash flow, so the
+          spot rate equals the par (bond-equivalent) yield.
+        - Longer maturities are par coupon bonds. For each, solve for the spot
+          rate s_N that prices the bond at par. Coupon dates before the last
+          known tenor use the curve built so far; coupon dates between the last
+          known tenor and this maturity use spot rates interpolated linearly
+          toward s_N. Interpolating toward the unknown (rather than holding the
+          last known spot flat) is what keeps long tenors such as 20Y and 30Y,
+          where Treasury quotes have 10-year gaps, consistent with their par
+          yields.
     """
-    par_yields = sorted(par_yields)
-    spots = {}  # tenor -> spot rate (decimal, not percent)
+    spots = {}  # tenor -> spot rate (decimal)
 
-    for tenor, par_yield_pct in par_yields:
-        par_yield = par_yield_pct / 100.0
-        coupon    = par_yield         # par bond: coupon rate = par yield
-        n_periods = round(tenor * 2)  # number of semi-annual periods
+    for tenor, par_yield_pct in sorted(par_yields):
+        coupon    = par_yield_pct / 100.0   # par bond: coupon rate = par yield
+        n_periods = round(tenor * 2)        # semi-annual coupon periods
 
-        if n_periods == 1:
-            # 6-month zero coupon: P = F/(1 + s/2) = F (par), so s/2 = coupon/2
-            # Direct: s_6m = par_yield (by definition for par bond at 6M)
-            spot = par_yield
-            spots[tenor] = spot
+        if n_periods <= 1:
+            spots[tenor] = coupon
             continue
 
-        # For coupon bonds: price = face (par bond)
-        # Σ_{t=1}^{N-1} [coupon/2 * face / (1 + s_t/2)^t]  +  (coupon/2 + 1) * face / (1 + s_N/2)^N = face
-        # Divide through by face:
-        # Σ_{t=1}^{N-1} [(coupon/2) / (1 + s_t/2)^t]  +  (coupon/2 + 1) / (1 + s_N/2)^N = 1
-
-        # Sum the PV of all cash flows EXCEPT the last one
-        pv_early = 0.0
-        for t in range(1, n_periods):
-            t_years     = t / 2.0
-            s_t         = _interpolate_spot(spots, t_years)
-            discount    = (1 + s_t / 2) ** t
-            pv_early   += (coupon / 2) / discount
-
-        # Solve for spot rate at this tenor:
-        # (coupon/2 + 1) / (1 + s_N/2)^N = 1 - pv_early
-        # (1 + s_N/2)^N = (coupon/2 + 1) / (1 - pv_early)
-        # s_N = 2 * [(coupon/2 + 1) / (1 - pv_early)]^(1/N) - 2
-
-        rhs     = (coupon / 2 + 1) / (1 - pv_early)
-        spot    = 2 * (rhs ** (1 / n_periods) - 1)
-        spots[tenor] = spot
+        spots[tenor] = _solve_spot(spots, tenor, coupon, n_periods)
 
     return [(t, s * 100) for t, s in sorted(spots.items())]
+
+
+def _par_bond_price(spots, tenor, coupon, n_periods):
+    """Price per unit face of a par coupon bond off a (partial) spot curve."""
+    pv = sum(
+        (coupon / 2) / (1 + _interpolate_spot(spots, k / 2.0) / 2) ** k
+        for k in range(1, n_periods)
+    )
+    return pv + (1 + coupon / 2) / (1 + spots[tenor] / 2) ** n_periods
+
+
+def _solve_spot(spots, tenor, coupon, n_periods, lo=-0.5, hi=1.0, tol=1e-14):
+    """
+    Spot rate at `tenor` that prices the par bond at exactly 1 (per unit face).
+    Price is decreasing in the spot rate, so bisection always converges.
+    """
+    for _ in range(200):
+        mid   = (lo + hi) / 2
+        trial = {**spots, tenor: mid}
+        if _par_bond_price(trial, tenor, coupon, n_periods) > 1:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < tol:
+            break
+    return (lo + hi) / 2
 
 
 def _interpolate_spot(spots, tenor):
@@ -194,7 +200,7 @@ def interpolate_curve(spot_rates, tenors, method="linear"):
     Args:
         spot_rates: list of (tenor, spot_pct) — known nodes
         tenors:     list of tenors to interpolate at
-        method:     "linear" (default) — cubic spline added in Day 5 extension
+        method:     "linear" (only linear is implemented)
 
     Returns:
         list of (tenor, interpolated_spot_pct)
@@ -322,7 +328,7 @@ def curve_summary(par_yields):
 
 
 if __name__ == "__main__":
-    # Quick smoke test with study guide numbers
+    # Quick smoke test
     par = [(0.5, 5.0), (1.0, 5.2), (1.5, 5.35), (2.0, 5.5)]
     result = curve_summary(par)
     print("Spot rates:")

@@ -71,23 +71,31 @@ function getInterpolatedSpot(spots, tenor) {
   return spots[keys[keys.length - 1]];
 }
 
+// Price per unit face of a par coupon bond off a (partial) spot curve in percent
+function parBondPrice(spots, T_n, c, N) {
+  let pv = 0;
+  for (let k = 1; k < N; k++) {
+    pv += (c / 2) / Math.pow(1 + getInterpolatedSpot(spots, k / 2) / 200, k);
+  }
+  return pv + (1 + c / 2) / Math.pow(1 + spots[T_n] / 200, N);
+}
+
+// Bills (<= 6M) take spot = par. For coupon bonds, solve for the spot rate that
+// prices the par bond at 1, with coupon dates past the last known tenor
+// interpolated toward the unknown spot (bisection; price falls as the rate rises).
 function bootstrapSpots(parYields) {
   const spots = {};
-  for (let i = 0; i < parYields.length; i++) {
-    const [T_n, par] = parYields[i];
-    const N = T_n * 2;
-    const c = par / 2 / 100;
+  const sorted = [...parYields].sort((a, b) => a[0] - b[0]);
+  for (const [T_n, par] of sorted) {
+    const N = Math.round(T_n * 2);
+    const c = par / 100;
     if (N <= 1) { spots[T_n] = par; continue; }
-    let pvCoupons = 0;
-    for (let k = 1; k < N; k++) {
-      const t_k = k / 2;
-      const s_k = getInterpolatedSpot(spots, t_k) / 100;
-      pvCoupons += c / Math.pow(1 + s_k / 2, k);
+    let lo = -50, hi = 100;  // percent
+    for (let iter = 0; iter < 200 && hi - lo > 1e-12; iter++) {
+      const mid = (lo + hi) / 2;
+      if (parBondPrice({ ...spots, [T_n]: mid }, T_n, c, N) > 1) lo = mid; else hi = mid;
     }
-    const rhs = 1 - pvCoupons;
-    if (rhs <= 0) { spots[T_n] = par; continue; }
-    const s_N = 2 * (Math.pow((1 + c) / rhs, 1 / N) - 1) * 100;
-    spots[T_n] = isFinite(s_N) ? s_N : par;
+    spots[T_n] = (lo + hi) / 2;
   }
   return spots;
 }
