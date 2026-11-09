@@ -68,4 +68,4 @@ python examples/nelson_siegel_pca.py
 
 ## Related Projects
 
-- [Bond Analytics](https://github.com/aharode/bond-analytics) — bond pricing, duration, convexity
+- [Bond Analytics](https://github.com/aharode/bond_pricer) — bond pricing, duration, convexity
