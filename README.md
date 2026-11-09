@@ -68,4 +68,3 @@ python examples/nelson_siegel_pca.py
 ## Related Projects
 
 - [Bond Analytics](https://github.com/aharode/bond-analytics) — bond pricing, duration, convexity
-- [Macro Dashboard](https://github.com/aharode/macro-dashboard) — FRED data, carry/roll strategy, backtester
